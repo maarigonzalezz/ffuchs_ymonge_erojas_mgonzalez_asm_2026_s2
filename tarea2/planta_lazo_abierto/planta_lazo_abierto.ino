@@ -3,6 +3,7 @@
  * CE 1110 - Tarea 2, Puntos extra 6 y 7 | ESP32 clasica, Arduino IDE
  * Pieza 1: esqueleto (pines, constantes, PWM motor y servo)
  * Pieza 2: sensor IR por interrupcion, RPM / rad/s y modo p
+ * Pieza 3: calibracion de servo (s <deg>) y aplicarFreno(u)
  */
 
 #include <Arduino.h>
@@ -47,13 +48,17 @@ const int LEDC_CH_MOTOR = 2;
 // ---------- Estado ----------
 int   motorPwm = 0;
 float servoDeg = 20.0f;
+float uBrake = 0;   // intensidad de freno 0..1
 
 // Velocidad
 float rpmRaw = 0, rpmFilt = 0, radS = 0;
 
 // Modos
-enum Mode { MODE_IDLE, MODE_PULSE_CHECK };
+enum Mode { MODE_IDLE, MODE_PULSE_CHECK, MODE_SERVO_CAL };
 Mode mode = MODE_IDLE;
+
+// Serial (lectura por lineas, sin bloquear)
+String rxLine;
 
 // Planificador (Ts con micros(), sin delay)
 uint32_t nextTickUs = 0;
@@ -118,6 +123,28 @@ void servoWriteDeg(float deg) {
   pwmWrite(PIN_SERVO, LEDC_CH_SERVO, duty);
 }
 
+// u en [0,1]: 0 = liberado; >0 interpola entre CONTACT y MAX_SAFE.
+// Funciona con MAX_SAFE > RELEASE o MAX_SAFE < RELEASE.
+// Seguridad: con freno aplicado el motor SIEMPRE se apaga.
+void aplicarFreno(float u) {
+  if (u < 0) u = 0;
+  if (u > 1) u = 1;
+  uBrake = u;
+  if (u <= 0.0f) {
+    servoWriteDeg(SERVO_RELEASE_DEG);
+  } else {
+    setMotorPWM(0);
+    servoWriteDeg(SERVO_CONTACT_DEG + u * (SERVO_MAX_SAFE_DEG - SERVO_CONTACT_DEG));
+  }
+}
+
+void paradaEmergencia() {
+  setMotorPWM(0);
+  aplicarFreno(0);
+  mode = MODE_IDLE;
+  Serial.println("#OK parada: motor PWM=0, freno liberado");
+}
+
 // ---------- Velocidad ----------
 void actualizarVelocidad() {
   uint32_t last, dt;
@@ -180,7 +207,91 @@ void imprimirAyuda() {
                 SERVO_RELEASE_DEG, SERVO_CONTACT_DEG, SERVO_MAX_SAFE_DEG);
   Serial.printf("Sensor: P=%lu pulsos/rev, flanco=%s\n", (unsigned long)PULSES_PER_REV,
                 (IR_EDGE == RISING) ? "RISING" : "FALLING");
-  Serial.println("Comandos: h | p (verificar IR, 1 vuelta = 16 pulsos) | x (salir/parar)");
+  Serial.println("Comandos:");
+  Serial.println("  h            ayuda");
+  Serial.println("  p            verificar IR (1 vuelta = 16 pulsos)");
+  Serial.println("  s <deg>      calibrar servo 0..180 (motor apagado), de 5 en 5 grados");
+  Serial.println("  x            parada de emergencia");
+}
+
+// ---------- Comandos por Serial ----------
+// Divide la linea en tokens separados por espacios
+int tokenizar(const String& s, String* out, int maxTok) {
+  int n = 0, i = 0, len = s.length();
+  while (i < len && n < maxTok) {
+    while (i < len && s[i] == ' ') i++;
+    if (i >= len) break;
+    int j = i;
+    while (j < len && s[j] != ' ') j++;
+    out[n++] = s.substring(i, j);
+    i = j;
+  }
+  return n;
+}
+
+// true si el texto es un numero (digitos, un punto, signo opcional)
+bool esNumero(const String& s) {
+  bool digito = false, punto = false;
+  for (int i = 0; i < (int)s.length(); i++) {
+    char c = s[i];
+    if (c >= '0' && c <= '9') digito = true;
+    else if (c == '.' && !punto) punto = true;
+    else if (c == '-' && i == 0) continue;
+    else return false;
+  }
+  return digito;
+}
+
+void procesarComando(String line) {
+  line.trim();
+  if (line.length() == 0) return;
+  String t[6];
+  int n = tokenizar(line, t, 6);
+  String cmd = t[0];
+  cmd.toLowerCase();
+
+  if (cmd == "x") {
+    paradaEmergencia();
+
+  } else if (cmd == "h") {
+    imprimirAyuda();
+
+  } else if (cmd == "p") {
+    setMotorPWM(0);
+    aplicarFreno(0);
+    resetPulsos();
+    mode = MODE_PULSE_CHECK;
+    Serial.printf("#OK verificacion IR: gire el disco 1 vuelta a mano; esperado %lu pulsos. 'x' para salir\n",
+                  (unsigned long)PULSES_PER_REV);
+
+  } else if (cmd == "s") {
+    if (n < 2 || !esNumero(t[1])) { Serial.println("#ERR uso: s <deg>"); return; }
+    float deg = t[1].toFloat();
+    if (deg < 0 || deg > 180) { Serial.println("#ERR deg fuera de 0..180"); return; }
+    setMotorPWM(0);
+    mode = MODE_SERVO_CAL;
+    uBrake = 0;
+    servoWriteDeg(deg);
+    Serial.printf("#OK servo en %.1f deg (motor apagado). Anote RELEASE / CONTACT / MAX_SAFE\n", servoDeg);
+
+  } else {
+    Serial.println("#ERR comando desconocido (h = ayuda)");
+  }
+}
+
+void leerSerial() {
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if ((c == 'x' || c == 'X') && rxLine.length() == 0) {   // emergencia inmediata
+      paradaEmergencia();
+      continue;
+    }
+    if (c == '\n' || c == '\r') {
+      if (rxLine.length() > 0) { procesarComando(rxLine); rxLine = ""; }
+    } else if (rxLine.length() < 80) {
+      rxLine += c;
+    }
+  }
 }
 
 // ---------- Setup / loop ----------
@@ -200,22 +311,7 @@ void setup() {
 }
 
 void loop() {
-  while (Serial.available() > 0) {
-    char c = (char)Serial.read();
-    if (c == 'h' || c == 'H') {
-      imprimirAyuda();
-    } else if (c == 'p' || c == 'P') {
-      resetPulsos();
-      mode = MODE_PULSE_CHECK;
-      Serial.printf("#OK verificacion IR: gire el disco 1 vuelta a mano; esperado %lu pulsos. 'x' para salir\n",
-                    (unsigned long)PULSES_PER_REV);
-    } else if (c == 'x' || c == 'X') {
-      setMotorPWM(0);
-      servoWriteDeg(SERVO_RELEASE_DEG);
-      mode = MODE_IDLE;
-      Serial.println("#OK parada: motor PWM=0, freno liberado");
-    }
-  }
+  leerSerial();
 
   uint32_t now = micros();
   if ((int32_t)(now - nextTickUs) >= 0) {
