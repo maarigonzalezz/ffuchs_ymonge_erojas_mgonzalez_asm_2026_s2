@@ -4,6 +4,7 @@
  * Pieza 1: esqueleto (pines, constantes, PWM motor y servo)
  * Pieza 2: sensor IR por interrupcion, RPM / rad/s y modo p
  * Pieza 3: calibracion de servo (s <deg>) y aplicarFreno(u)
+ * Pieza 4: modo manual (m, u) y parada de emergencia (x y boton GPIO33)
  */
 
 #include <Arduino.h>
@@ -30,7 +31,8 @@ const float    RPM_EMA_ALPHA    = 0.35f;     // filtro EMA (0..1, mayor = menos 
 // ---------- Motor ----------
 const uint32_t MOTOR_PWM_FREQ = 20000;
 const uint8_t  MOTOR_PWM_BITS = 8;     // duty 0..255
-const int      MOTOR_PWM_MAX  = 255;
+const int      MOTOR_PWM_MAX  = 255;         // limite de seguridad (bajar para limitar velocidad)
+const int      DEFAULT_START_PWM = 150;      // PWM del boton de inicio
 
 // ---------- Servo (valores de relleno, se calibran en la pieza 3) ----------
 float SERVO_RELEASE_DEG  = 20.0f;
@@ -54,8 +56,13 @@ float uBrake = 0;   // intensidad de freno 0..1
 float rpmRaw = 0, rpmFilt = 0, radS = 0;
 
 // Modos
-enum Mode { MODE_IDLE, MODE_PULSE_CHECK, MODE_SERVO_CAL };
+enum Mode { MODE_IDLE, MODE_PULSE_CHECK, MODE_SERVO_CAL, MODE_MANUAL };
 Mode mode = MODE_IDLE;
+
+// Manual y botones
+int lastManualPwm = DEFAULT_START_PWM;
+bool btnStartPrev = true, btnStopPrev = true;
+uint32_t btnStartT = 0, btnStopT = 0;
 
 // Serial (lectura por lineas, sin bloquear)
 String rxLine;
@@ -195,6 +202,37 @@ void tickMuestreo() {
     Serial.printf("#P pulsos=%lu vueltas=%.2f rpm=%.1f\n",
                   (unsigned long)n, (float)n / (float)PULSES_PER_REV, rpmFilt);
   }
+
+  if (mode == MODE_MANUAL && tickCount % 5 == 0) {          // telemetria cada 100 ms
+    Serial.printf("t_ms=%lu pwm=%d u=%.2f servo=%.1f rpm=%.1f rad_s=%.2f pulsos=%lu\n",
+                  (unsigned long)millis(), motorPwm, uBrake, servoDeg,
+                  rpmFilt, radS, (unsigned long)leerPulsos());
+  }
+}
+
+// ---------- Botones (opcionales) ----------
+void leerBotones() {
+#if USE_PHYSICAL_BUTTONS
+  uint32_t now = millis();
+  bool bStart = digitalRead(PIN_BTN_START);
+  bool bStop  = digitalRead(PIN_BTN_STOP);
+
+  if (bStop != btnStopPrev && (now - btnStopT) > 40) {
+    btnStopT = now;
+    btnStopPrev = bStop;
+    if (!bStop) paradaEmergencia();                     // flanco de bajada = pulsado
+  }
+  if (bStart != btnStartPrev && (now - btnStartT) > 40) {
+    btnStartT = now;
+    btnStartPrev = bStart;
+    if (!bStart && bStop) {                             // inicio no actua si parada esta presionado
+      aplicarFreno(0);
+      setMotorPWM(lastManualPwm);
+      mode = MODE_MANUAL;
+      Serial.printf("#OK boton inicio: manual pwm=%d\n", lastManualPwm);
+    }
+  }
+#endif
 }
 
 // ---------- Ayuda ----------
@@ -211,7 +249,9 @@ void imprimirAyuda() {
   Serial.println("  h            ayuda");
   Serial.println("  p            verificar IR (1 vuelta = 16 pulsos)");
   Serial.println("  s <deg>      calibrar servo 0..180 (motor apagado), de 5 en 5 grados");
-  Serial.println("  x            parada de emergencia");
+  Serial.println("  m <pwm>      motor a lazo abierto, pwm 0..255, freno liberado");
+  Serial.println("  u <val>      apaga motor y frena con intensidad 0.0..1.0 (0 = liberar)");
+  Serial.println("  x            parada de emergencia (tambien boton GPIO33)");
 }
 
 // ---------- Comandos por Serial ----------
@@ -240,6 +280,11 @@ bool esNumero(const String& s) {
     else return false;
   }
   return digito;
+}
+
+// true si el texto es un entero sin signo
+bool esEntero(const String& s) {
+  return esNumero(s) && s.indexOf('.') < 0 && s.indexOf('-') < 0;
 }
 
 void procesarComando(String line) {
@@ -274,6 +319,24 @@ void procesarComando(String line) {
     servoWriteDeg(deg);
     Serial.printf("#OK servo en %.1f deg (motor apagado). Anote RELEASE / CONTACT / MAX_SAFE\n", servoDeg);
 
+  } else if (cmd == "m") {
+    if (n < 2 || !esEntero(t[1])) { Serial.println("#ERR uso: m <pwm 0..255>"); return; }
+    int pwm = t[1].toInt();
+    if (pwm > MOTOR_PWM_MAX) { Serial.printf("#ERR pwm fuera de 0..%d\n", MOTOR_PWM_MAX); return; }
+    aplicarFreno(0);                 // freno liberado antes de energizar el motor
+    setMotorPWM(pwm);
+    if (pwm > 0) lastManualPwm = pwm;
+    mode = MODE_MANUAL;
+    Serial.printf("#OK manual: pwm=%d, freno liberado\n", pwm);
+
+  } else if (cmd == "u") {
+    if (n < 2 || !esNumero(t[1])) { Serial.println("#ERR uso: u <0.0..1.0>"); return; }
+    float u = t[1].toFloat();
+    if (u < 0 || u > 1) { Serial.println("#ERR u fuera de 0.0..1.0"); return; }
+    mode = MODE_MANUAL;
+    aplicarFreno(u);                 // si u>0 tambien apaga el motor
+    Serial.printf("#OK freno u=%.2f (servo %.1f deg), motor PWM=%d\n", uBrake, servoDeg, motorPwm);
+
   } else {
     Serial.println("#ERR comando desconocido (h = ayuda)");
   }
@@ -303,6 +366,14 @@ void setup() {
   setMotorPWM(0);                    // motor apagado al arrancar
   servoWriteDeg(SERVO_RELEASE_DEG);  // freno liberado al arrancar
 
+#if USE_PHYSICAL_BUTTONS
+  pinMode(PIN_BTN_START, INPUT_PULLUP);
+  pinMode(PIN_BTN_STOP, INPUT_PULLUP);
+  // estado inicial real: un boton ya presionado al encender NO cuenta como pulsacion
+  btnStartPrev = digitalRead(PIN_BTN_START);
+  btnStopPrev  = digitalRead(PIN_BTN_STOP);
+#endif
+
   pinMode(PIN_IR, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PIN_IR), isrPulse, IR_EDGE);
 
@@ -312,6 +383,7 @@ void setup() {
 
 void loop() {
   leerSerial();
+  leerBotones();
 
   uint32_t now = micros();
   if ((int32_t)(now - nextTickUs) >= 0) {
