@@ -8,7 +8,7 @@
  * Pieza 5: ensayos automaticos step / coast-down y registro CSV a 50 Hz
  * Ejemplos: step 150 0 3000 1000 10000     (coast-down)
  *           step 150 0.3 3000 1000 10000   (escalon de frenado)
- * Calibrar angulos y verificar 16 pulsos/vuelta antes de tomar datos reales.
+ * Calibrar angulos y verificar el conteo por vuelta antes de tomar datos reales.
  */
 
 #include <Arduino.h>
@@ -37,9 +37,9 @@ const uint32_t MAX_STAGE_MS = 600000;  // limita conversiones y diferencias de t
 const uint32_t BUTTON_DEBOUNCE_MS = 40;
 
 // ---------- Sensor de velocidad ----------
-const uint32_t PULSES_PER_REV   = 16;        // 16 bloques negros + 16 espacios
+const uint32_t PULSES_PER_REV   = 32;        // pulsos efectivos por vuelta configurados
 #define        IR_EDGE            FALLING    // contar UN solo tipo de flanco: RISING o FALLING
-const uint32_t MIN_PULSE_US     = 2000UL;    // anti-rebote (a 600 RPM, P=16 -> 6250 us)
+const uint32_t MIN_PULSE_US     = 2000UL;    // anti-rebote (a 600 RPM, P=32 -> 3125 us)
 const uint32_t PULSE_TIMEOUT_US = 250000UL;  // sin pulsos por este tiempo -> 0 RPM
 const float    RPM_EMA_ALPHA    = 0.35f;     // filtro EMA (0..1, mayor = menos filtrado)
 
@@ -50,9 +50,9 @@ const int      MOTOR_PWM_MAX  = 255;         // limite de seguridad (bajar para 
 const int      DEFAULT_START_PWM = 150;      // PWM del boton de inicio
 
 // ---------- Servo (valores de relleno, se calibran en la pieza 3) ----------
-float SERVO_RELEASE_DEG  = 20.0f;
-float SERVO_CONTACT_DEG  = 50.0f;
-float SERVO_MAX_SAFE_DEG = 75.0f;
+float SERVO_RELEASE_DEG  = 44.0f;
+float SERVO_CONTACT_DEG  = 49.0f;
+float SERVO_MAX_SAFE_DEG = 53.0f;
 const uint32_t SERVO_FREQ_HZ = 50;
 const uint8_t  SERVO_BITS    = 14;
 const int      SERVO_MIN_US  = 500;
@@ -91,8 +91,8 @@ uint32_t manualReleaseUs = 0;
 
 // Manual y botones
 int lastManualPwm = DEFAULT_START_PWM;
-bool btnStartPrev = true, btnStopPrev = true;
-bool btnStartStable = true, startArmed = true;
+bool btnStartPrev = false, btnStopPrev = false;
+bool btnStartStable = false, startArmed = true;
 uint32_t btnStartT = 0;
 
 // Serial (lectura por lineas, sin bloquear)
@@ -242,7 +242,7 @@ void aplicarFreno(float u) {
 
 bool botonParadaActivo() {
 #if USE_PHYSICAL_BUTTONS
-  return digitalRead(PIN_BTN_STOP) == LOW;
+  return digitalRead(PIN_BTN_STOP) == HIGH;
 #else
   return false;
 #endif
@@ -447,22 +447,22 @@ void tickMuestreo() {
 void leerBotones() {
 #if USE_PHYSICAL_BUTTONS
   uint32_t now = millis();
-  bool bStart = digitalRead(PIN_BTN_START);
-  bool bStop  = digitalRead(PIN_BTN_STOP);
+  bool inicioPresionado = digitalRead(PIN_BTN_START) == HIGH;
+  bool paradaPresionada = botonParadaActivo();
 
-  // La parada actua al primer nivel bajo; no espera al antirrebote del inicio.
-  if (!bStop && (btnStopPrev || mode != MODE_IDLE)) paradaEmergencia();
-  btnStopPrev = bStop;
-  if (bStart != btnStartPrev) {
-    btnStartPrev = bStart;
+  // La parada actua al primer nivel alto; no espera al antirrebote del inicio.
+  if (paradaPresionada && (!btnStopPrev || mode != MODE_IDLE)) paradaEmergencia();
+  btnStopPrev = paradaPresionada;
+  if (inicioPresionado != btnStartPrev) {
+    btnStartPrev = inicioPresionado;
     btnStartT = now;
   }
   if (now - btnStartT >= BUTTON_DEBOUNCE_MS) {
-    if (bStart) startArmed = true; // tambien se exige una liberacion estable
-    if (bStart != btnStartStable) {
-      btnStartStable = bStart;
-      if (!bStart) {
-        bool mayStart = startArmed && bStop && mode != MODE_STEP && outputsReady &&
+    if (!inicioPresionado) startArmed = true; // tambien se exige una liberacion estable
+    if (inicioPresionado != btnStartStable) {
+      btnStartStable = inicioPresionado;
+      if (inicioPresionado) {
+        bool mayStart = startArmed && !paradaPresionada && mode != MODE_STEP && outputsReady &&
                         serialTxSize <= SERIAL_TX_CAPACITY - 2 * SERIAL_TX_RESERVE;
         startArmed = false;
         if (mayStart) iniciarManual(lastManualPwm);
@@ -484,7 +484,8 @@ void imprimirAyuda() {
                 (IR_EDGE == RISING) ? "RISING" : "FALLING");
   serialPrintln("Comandos:");
   serialPrintln("  h            ayuda");
-  serialPrintln("  p            verificar IR (1 vuelta = 16 pulsos)");
+  serialPrintf("  p            verificar IR (1 vuelta = %lu pulsos)\n",
+                (unsigned long)PULSES_PER_REV);
   serialPrintln("  s <deg>      calibrar servo 0..180 (motor apagado), de 5 en 5 grados");
   serialPrintln("  m <pwm>      motor a lazo abierto, pwm 0..255, freno liberado");
   serialPrintln("  u <val>      apaga motor y frena con intensidad 0.0..1.0 (0 = liberar)");
@@ -669,13 +670,13 @@ void setup() {
   servoWriteDeg(SERVO_RELEASE_DEG);  // freno liberado al arrancar
 
 #if USE_PHYSICAL_BUTTONS
-  pinMode(PIN_BTN_START, INPUT_PULLUP);
-  pinMode(PIN_BTN_STOP, INPUT_PULLUP);
+  pinMode(PIN_BTN_START, INPUT_PULLDOWN);
+  pinMode(PIN_BTN_STOP, INPUT_PULLDOWN);
   // estado inicial real: un boton ya presionado al encender NO cuenta como pulsacion
-  btnStartPrev = digitalRead(PIN_BTN_START);
-  btnStopPrev  = digitalRead(PIN_BTN_STOP);
+  btnStartPrev = digitalRead(PIN_BTN_START) == HIGH;
+  btnStopPrev  = botonParadaActivo();
   btnStartStable = btnStartPrev;
-  startArmed = btnStartPrev;
+  startArmed = !btnStartPrev;
   btnStartT = millis();
 #endif
 

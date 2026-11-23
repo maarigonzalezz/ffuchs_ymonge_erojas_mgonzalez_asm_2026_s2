@@ -1,3 +1,4 @@
+function modelo = caracterizacion_planta(opciones)
 %% ========================================================================
 %  CE 1110 - Analisis de Senales Mixtas (ITCR)
 %  Tarea 2 (Punto 7, +40% extra) y Proyecto 2 (Etapa 3: Identificacion)
@@ -14,29 +15,57 @@
 %    - Freno: servomotor MG996 (GPIO26, 6 V)
 %    - Sensor IR AD33838 (GPIO27, 3.3 V)
 % ========================================================================
-clear; clc; close all;
-
-%% 1. CONFIGURACION PRINCIPAL (EDITAR SOLO ESTA SECCION AL CAMBIAR A DATOS REALES)
-% ------------------------------------------------------------------------
-USAR_DATOS_EJEMPLO = true;  % <-- CAMBIAR A false CUANDO TENGAS LOS CSV REALES EN ./datos/
-
-rutaBase = fileparts(mfilename("fullpath"));
-if USAR_DATOS_EJEMPLO
-    carpetaDatos = fullfile(rutaBase, "datos_ejemplo");
-    if ~isfile(fullfile(carpetaDatos, "coastdown_1.csv"))
-        generar_datos_ejemplo(carpetaDatos);
-    end
-    fprintf(">> MODO PRUEBA: usando datos sinteticos en %s\n", carpetaDatos);
-    fprintf("   (Cambia USAR_DATOS_EJEMPLO = false para analizar tus CSV reales).\n\n");
-else
-    carpetaDatos = fullfile(rutaBase, "datos");
-    fprintf(">> MODO EXPERIMENTAL: leyendo CSV reales desde %s\n\n", carpetaDatos);
+% No limpiar el workspace ni cerrar figuras ajenas al analisis.
+arguments
+    opciones.UsarDatosEjemplo (1,1) logical = true
+    opciones.CarpetaDatos (1,1) string = ""
+    opciones.ArchivoCoastdown (1,1) string = "coastdown_1.csv"
+    opciones.ArchivoIdentificacion (1,1) string = "step_u04_1.csv"
+    opciones.ArchivoValidacion (1,1) string = "step_u07_1.csv"
+    opciones.CarpetaResultados (1,1) string = ""
+    opciones.GuardarFiguras (1,1) logical = true
+    opciones.MostrarFiguras (1,1) logical = true
+    opciones.UsarSenalFiltrada (1,1) logical = false
+    opciones.OmegaMinValida (1,1) double {mustBeFinite,mustBeNonnegative} = 4
+    opciones.ExigirCapturaCompleta (1,1) logical = true
+    opciones.MaxDelay (1,1) double {mustBeFinite,mustBePositive} = .5
+end
+if isempty(which("tf")) || ~license("test", "Control_Toolbox")
+    error("frenado:Toolbox", "Instale Control System Toolbox (licencia e instalacion son requisitos distintos).");
 end
 
+%% 1. CONFIGURACION MEDIANTE ARGUMENTOS OPCIONALES
+USAR_DATOS_EJEMPLO = opciones.UsarDatosEjemplo;
+rutaBase = fileparts(mfilename("fullpath"));
+carpetaDatos = opciones.CarpetaDatos;
+if strlength(carpetaDatos)==0
+    if USAR_DATOS_EJEMPLO
+        carpetaDatos = fullfile(rutaBase,"datos_sinteticos");
+        if ~isfolder(carpetaDatos), generar_datos_ejemplo(carpetaDatos); end
+    else
+        carpetaDatos = fullfile(rutaBase,"datos");
+    end
+end
+fprintf("Datos: %s (sinteticos=%d)\n",carpetaDatos,USAR_DATOS_EJEMPLO);
+modo = "experimentales";
+etiqueta = "DATOS EXPERIMENTALES";
+if USAR_DATOS_EJEMPLO
+    modo = "sinteticos";
+    etiqueta = "DATOS SINTETICOS - NO SON MEDICIONES";
+end
+carpetaResultados = fullfile(rutaBase,"resultados",modo);
+if strlength(opciones.CarpetaResultados) > 0
+    carpetaResultados = fullfile(opciones.CarpetaResultados,modo);
+end
+% Cada ejecucion conserva sus propios resultados para poder compararlos.
+carpetaResultados = fullfile(carpetaResultados,string(datetime("now","Format","yyyyMMdd_HHmmss_SSS")));
+visibilidad = "on";
+if ~opciones.MostrarFiguras, visibilidad = "off"; end
+
 % Archivos CSV (puedes agregar mas repeticiones o cambiar nombres aqui)
-archivoCoastdown   = fullfile(carpetaDatos, "coastdown_1.csv");
-archivoEscalonId   = fullfile(carpetaDatos, "step_u04_1.csv");  % Ensayo usado para identificar
-archivoEscalonVal  = fullfile(carpetaDatos, "step_u07_1.csv");  % Ensayo usado para validar
+archivoCoastdown   = fullfile(carpetaDatos, opciones.ArchivoCoastdown);
+archivoEscalonId   = fullfile(carpetaDatos, opciones.ArchivoIdentificacion);  % Ensayo usado para identificar
+archivoEscalonVal  = fullfile(carpetaDatos, opciones.ArchivoValidacion);  % Ensayo usado para validar
 
 % Constantes fisicas del banco
 DIAMETRO_DISCO_M   = 0.130;   % 13 cm (disco 3D real)
@@ -46,21 +75,22 @@ PULSOS_POR_REV     = 16;      % 16 bloques negros y 16 blancos
 TS_NOMINAL         = 0.020;   % 20 ms (50 Hz)
 
 % Region valida para identificacion (evita cuantizacion/timeout del sensor IR cerca de 0 RPM)
-OMEGA_MIN_VALIDA   = 4.0;     % rad/s (~38 RPM)
-USAR_SENAL_FILTRADA = true;   % true = usa rad_s / rpm_filt; false = usa rpm_raw
+OMEGA_MIN_VALIDA   = opciones.OmegaMinValida;     % rad/s (~38 RPM)
+USAR_SENAL_FILTRADA = opciones.UsarSenalFiltrada;   % true = usa rad_s / rpm_filt; false = usa rpm_raw
 
 % Exportacion de graficas y modelo
-carpetaFiguras = fullfile(rutaBase, "figuras");
+carpetaFiguras = fullfile(carpetaResultados, "figuras");
 if ~isfolder(carpetaFiguras)
     mkdir(carpetaFiguras);
 end
-GUARDAR_FIGURAS = true;
+GUARDAR_FIGURAS = opciones.GuardarFiguras;
 
 %% 2. CARGA Y PREPROCESAMIENTO DE LOS ENSAYOS CSV
 % ------------------------------------------------------------------------
-coast = cargarEnsayoCSV(archivoCoastdown, USAR_SENAL_FILTRADA, OMEGA_MIN_VALIDA);
-idRun = cargarEnsayoCSV(archivoEscalonId, USAR_SENAL_FILTRADA, OMEGA_MIN_VALIDA);
-valRun = cargarEnsayoCSV(archivoEscalonVal, USAR_SENAL_FILTRADA, OMEGA_MIN_VALIDA);
+requireMetadata = opciones.ExigirCapturaCompleta && ~USAR_DATOS_EJEMPLO;
+coast = frenado.cargarEnsayoCSV(archivoCoastdown, USAR_SENAL_FILTRADA, OMEGA_MIN_VALIDA,8,requireMetadata);
+idRun = frenado.cargarEnsayoCSV(archivoEscalonId, USAR_SENAL_FILTRADA, OMEGA_MIN_VALIDA,8,requireMetadata);
+valRun = frenado.cargarEnsayoCSV(archivoEscalonVal, USAR_SENAL_FILTRADA, OMEGA_MIN_VALIDA,8,requireMetadata);
 
 fprintf("=== RESUMEN DE ENSAYOS CARGADOS ===\n");
 fprintf("Coast-down   : w0 = %.2f rad/s (%.1f RPM), u0 = %.2f, Ts_prom = %.1f ms, t_valido = %.2f s\n", ...
@@ -74,71 +104,23 @@ if idRun.u0 <= 0
     error("El ensayo de identificacion (%s) tiene u0 <= 0. Verifica la columna u_brake.", archivoEscalonId);
 end
 
-%% 3. IDENTIFICACION DE PERDIDAS NATURALES (COAST-DOWN, u = 0)
-% ------------------------------------------------------------------------
-% Ecuacion diferencial sin freno (Tarea 2, Ec. 26 con u = 0):
-%   w_dot + a * w + c0 = 0,   donde a = b/J [1/s],  c0 = tau_c/J [rad/s^2]
-% Solucion analitica para w(0) = w0:
-%   Caso B (a > 0): w(t) = (w0 + c0/a) * exp(-a*t) - c0/a
-%   Caso A (a ~ 0): w(t) = w0 - c0 * t
-
-modeloCoast = @(p, t, w0) evaluarCoastdown(p(1), p(2), t, w0);
-
-% Estimacion inicial por pendiente promedio
-pendienteIni = max(0.5, (coast.w0 - coast.w_val(end)) / max(coast.t_val(end), 0.1));
-p0_coast = [0.20, 0.7 * pendienteIni]; % [a, c0]
-
-costoCoast = @(p) sum((coast.w_val - modeloCoast(p, coast.t_val, coast.w0)).^2) ...
-                  + 1e6 * (p(1) < 0) + 1e6 * (p(2) < 0);
-
-optsFmin = optimset("Display", "off", "MaxFunEvals", 5000, "MaxIter", 3000, "TolX", 1e-7, "TolFun", 1e-7);
-pOptCoast = fminsearch(costoCoast, p0_coast, optsFmin);
-a_hat  = max(0, pOptCoast(1));   % b / J  [1/s]
-c0_hat = max(0, pOptCoast(2));   % tau_c / J  [rad/s^2]
-
-w_coast_fit = evaluarCoastdown(a_hat, c0_hat, coast.t_val, coast.w0);
-[rmse_coast, r2_coast] = calcularMetricas(coast.w_val, w_coast_fit);
-
-%% 4. IDENTIFICACION DEL FRENO: RETARDO L Y GANANCIA LOCAL Kb/J (ESCALON ID)
-% ------------------------------------------------------------------------
-% Trayectoria nominal (sin freno) partiendo de la misma w0 del ensayo de escalon:
-w_nom_id = evaluarCoastdown(a_hat, c0_hat, idRun.t_val, idRun.w0);
-
-% Variacion incremental causada exclusivamente por la zapata:
-%   Delta_w(t) = w_step(t) - w_nom(t)  (negativa porque frenar reduce la velocidad)
-dw_exp_id = idRun.w_val - w_nom_id;
-
-% Modelo incremental local con retardo puro L (Tarea 2, Ec. 6):
-%   Delta_w_L(t) = -(Kb_J * u0 / a) * (1 - exp(-a*(t - L))) * H(t - L)
-modeloDeltaW = @(Kb_J, L, u0, t) evaluarDeltaW(Kb_J, a_hat, L, u0, t);
-
-% Busqueda en malla inicial para evitar minimos locales en el retardo L
-L_malla = 0 : 0.010 : min(0.35, 0.4 * idRun.t_val(end));
-mejorCosto = inf;
-mejorP = [15.0, 0.06];
-
-for L_cand = L_malla
-    % Para un L fijo, el modelo es lineal en Kb_J -> solucion cerrada optima
-    phi = evaluarDeltaW(1.0, a_hat, L_cand, idRun.u0, idRun.t_val);
-    denom = dot(phi, phi);
-    if denom > 1e-12
-        Kb_cand = max(0.01, dot(phi, dw_exp_id) / denom);
-        res = dw_exp_id - Kb_cand * phi;
-        costo = sum(res.^2);
-        if costo < mejorCosto
-            mejorCosto = costo;
-            mejorP = [Kb_cand, L_cand];
-        end
-    end
+%% 3-4. AJUSTE CON PARAMETROS FISICOS Y CONVERGENCIA VERIFICADA
+parametros = frenado.identificar(coast,idRun,opciones.MaxDelay);
+a_hat = parametros.a;
+c0_hat = parametros.c0;
+Kb_J_hat = parametros.gain;
+L_hat = parametros.delay;
+if valRun.u0 <= 0
+    error("frenado:TrialRoles", "El ensayo de validacion debe aplicar freno.");
 end
-
-% Refinamiento fino con fminsearch
-costoStep = @(p) sum((dw_exp_id - modeloDeltaW(p(1), p(2), idRun.u0, idRun.t_val)).^2) ...
-                 + 1e6 * (p(1) <= 0) + 1e6 * (p(2) < 0) + 1e6 * (p(2) > 0.5);
-pOptStep = fminsearch(costoStep, mejorP, optsFmin);
-
-Kb_J_hat = pOptStep(1);   % Kb / J  [(rad/s^2) / u]
-L_hat    = pOptStep(2);   % Retardo puro del servo [s]
+if abs(idRun.w0-coast.w0)/coast.w0 > .05 || abs(valRun.w0-coast.w0)/coast.w0 > .05
+    warning("frenado:DifferentStarts", "Las velocidades iniciales difieren mas de 5%%; revise repetibilidad.");
+end
+w_coast_fit = frenado.evaluarCoastdown(a_hat,c0_hat,coast.t_val,coast.w0);
+[rmse_coast,r2_coast] = calcularMetricas(coast.w_val,w_coast_fit);
+w_nom_id = frenado.evaluarCoastdown(a_hat,c0_hat,idRun.t_val,idRun.w0);
+dw_exp_id = idRun.w_val-w_nom_id;
+modeloDeltaW = @(gain,delay,u,t) frenado.evaluarDeltaW(gain,a_hat,delay,u,t);
 
 % Prediccion en identificacion
 dw_fit_id = modeloDeltaW(Kb_J_hat, L_hat, idRun.u0, idRun.t_val);
@@ -159,20 +141,20 @@ Gp.InputName  = "u_freno";
 Gp.OutputName = "Delta_omega";
 
 % Verificacion directa con step() de MATLAB sobre el ensayo de identificacion
-dw_step_matlab_id = step(idRun.u0 * Gp, idRun.t_val);
+dw_step_matlab_id = frenado.respuestaEscalon(Gp, idRun.u0, idRun.t_val);
 
 %% 6. VALIDACION CRUZADA CON ENSAYO NO USADO EN EL AJUSTE (ESCALON VAL)
 % ------------------------------------------------------------------------
-w_nom_val  = evaluarCoastdown(a_hat, c0_hat, valRun.t_val, valRun.w0);
+w_nom_val  = frenado.evaluarCoastdown(a_hat, c0_hat, valRun.t_val, valRun.w0);
 dw_exp_val = valRun.w_val - w_nom_val;
-dw_pred_val = step(valRun.u0 * Gp, valRun.t_val);
+dw_pred_val = frenado.respuestaEscalon(Gp, valRun.u0, valRun.t_val);
 w_pred_val  = max(0, w_nom_val + dw_pred_val);
 [rmse_val, r2_val] = calcularMetricas(valRun.w_val, w_pred_val);
 
 %% 7. RESPUESTA AL IMPULSO EN MATLAB Y ANALISIS DE MUESTREO
 % ------------------------------------------------------------------------
 % Requisito explicito del Punto 7: usar la respuesta al impulso de MATLAB
-t_imp = (0 : 0.005 : max(2.0, 5 / max(a_hat, 0.5)))';
+t_imp = (0 : 0.005 : min(120, max(2.0, 5 / max(a_hat, 1e-8))))';
 [h_sinL, t_imp] = impulse(Gp_sin_retardo, t_imp);
 [h_conL, ~]     = impulse(Gp, t_imp);
 
@@ -180,13 +162,11 @@ t_imp = (0 : 0.005 : max(2.0, 5 / max(a_hat, 0.5)))';
 polo_s = -a_hat;
 if a_hat > 1e-4
     tau_hat = 1 / a_hat;          % tau = J / b [s]
-    K_dc    = Kb_J_hat / a_hat;   % Ganancia estatica local Kb / b [rad/s por u]
-    w_bw    = a_hat;              % Ancho de banda de -3 dB en lazo abierto [rad/s]
-    f_bw    = w_bw / (2 * pi);    % [Hz]
+    K_dc    = -Kb_J_hat / a_hat;   % Ganancia estatica local Kb / b [rad/s por u]
+    f_bw    = a_hat / (2 * pi);    % [Hz]
 else
     tau_hat = inf;
     K_dc    = inf;
-    w_bw    = NaN;
     f_bw    = NaN;
 end
 
@@ -202,7 +182,8 @@ fprintf("Parametros normalizados por inercia efectiva J:\n");
 fprintf("  a   = b / J       = %.4f 1/s\n", a_hat);
 fprintf("  c0  = tau_c / J   = %.4f rad/s^2\n", c0_hat);
 fprintf("  Kb/J              = %.4f (rad/s^2) / u\n", Kb_J_hat);
-fprintf("  Retardo servo L   = %.4f s (%.1f ms)\n", L_hat, L_hat * 1000);
+fprintf("  Retardo efectivo L   = %.4f s (%.1f ms)\n", L_hat, L_hat * 1000);
+fprintf("  L incluye dinamica del actuador y del estimador de velocidad.\n");
 if isfinite(tau_hat)
     fprintf("  Constante tau=J/b = %.3f s\n", tau_hat);
     fprintf("  Polo local s_p    = %.4f rad/s\n", polo_s);
@@ -233,16 +214,17 @@ fprintf("\nVerificacion de la frecuencia de muestreo propuesta (Ts = %.0f ms, fs
 if isfinite(tau_hat)
     fprintf("  Criterio tiempo  Ts <= tau/10 : %.1f ms <= %.1f ms -> %s\n", ...
             TS_NOMINAL*1000, Ts_criterio_tau*1000, string(TS_NOMINAL <= Ts_criterio_tau));
-    fprintf("  Ancho banda lazo abierto f_BW : %.3f Hz (30*f_BW = %.1f Hz)\n", ...
+    fprintf("  Ancho banda SOLO planta f_BW : %.3f Hz (30*f_BW = %.1f Hz)\n", ...
             f_bw, fs_criterio_bw);
 end
+fprintf("  El criterio de 30*f_BW del futuro lazo cerrado requiere disenar el controlador.\n");
 fprintf("  Resolucion optica (P = %d)    : a 600 RPM -> %.1f Hz (%.2f ms/pulso)\n", ...
         PULSOS_POR_REV, PULSOS_POR_REV*600/60, 60000/(PULSOS_POR_REV*600));
 fprintf("========================================================================\n\n");
 
 %% 9. FIGURA 1: ENSAYOS EXPERIMENTALES A LAZO ABIERTO (VELOCIDAD Y ENTRADA)
 % ------------------------------------------------------------------------
-f1 = crearFiguraClara("Fig 1 - Ensayos a lazo abierto", [60, 120, 920, 620]);
+f1 = crearFiguraClara("Fig 1 - Ensayos a lazo abierto", [60, 120, 920, 620], visibilidad);
 
 subplot(2,1,1); hold on; grid on;
 plot(coast.t_full, coast.w_full * 60/(2*pi), "k--", "LineWidth", 1.8, ...
@@ -268,7 +250,7 @@ legend("Location", "southeast");
 
 %% 10. FIGURA 2: RESPUESTA AL ESCALON (IDENTIFICACION Y VALIDACION CRUZADA)
 % ------------------------------------------------------------------------
-f2 = crearFiguraClara("Fig 2 - Respuesta al escalon vs modelo", [100, 90, 980, 640]);
+f2 = crearFiguraClara("Fig 2 - Respuesta al escalon vs modelo", [100, 90, 980, 640], visibilidad);
 
 % Panel superior izquierdo: velocidad absoluta (ID + Coast-down)
 subplot(2,2,1); hold on; grid on;
@@ -314,7 +296,7 @@ legend("Location", "southwest");
 
 %% 11. FIGURA 3: RESPUESTA AL IMPULSO EN MATLAB (REQUISITO EXPLICITO PUNTO 7)
 % ------------------------------------------------------------------------
-f3 = crearFiguraClara("Fig 3 - Respuesta al impulso en MATLAB", [140, 80, 900, 500]);
+f3 = crearFiguraClara("Fig 3 - Respuesta al impulso en MATLAB", [140, 80, 900, 500], visibilidad);
 hold on; grid on;
 plot(t_imp, h_sinL, "--", "Color", [0.45 0.45 0.45], "LineWidth", 1.6, ...
      "DisplayName", "impulse(G_p) sin retardo");
@@ -334,7 +316,7 @@ legend("Location", "southeast");
 
 %% 12. FIGURA 4: POLOS/CEROS Y VERIFICACION EN FRECUENCIA (MUESTREO Ts = 20 ms)
 % ------------------------------------------------------------------------
-f4 = crearFiguraClara("Fig 4 - Polos y diagrama de Bode", [180, 70, 980, 440]);
+f4 = crearFiguraClara("Fig 4 - Polos y diagrama de Bode", [180, 70, 980, 440], visibilidad);
 
 subplot(1,2,1);
 pzmap(Gp_sin_retardo);
@@ -357,6 +339,10 @@ xlabel("Frecuencia f (Hz)");
 ylabel("Magnitud (dB)");
 title("Respuesta en frecuencia local y criterio de muestreo");
 legend("Location", "southwest");
+
+for fig = [f1,f2,f3,f4]
+    sgtitle(fig,etiqueta,"FontWeight","bold");
+end
 
 %% 13. GUARDADO DE FIGURAS Y MODELO (.mat)
 % ------------------------------------------------------------------------
@@ -384,7 +370,15 @@ modelo = struct( ...
     "rmse_val", rmse_val, "r2_val", r2_val, ...
     "usando_datos_ejemplo", USAR_DATOS_EJEMPLO ...
 );
-rutaMat = fullfile(rutaBase, "modelo_planta_identificado.mat");
+modelo.carpeta_resultados = carpetaResultados;
+modelo.archivos_fuente = [archivoCoastdown,archivoEscalonId,archivoEscalonVal];
+modelo.fecha_analisis = char(datetime("now","Format","yyyy-MM-dd HH:mm:ss"));
+modelo.senal_filtrada = USAR_SENAL_FILTRADA;
+modelo.retardo_incluye_medicion = true;
+modelo.calidad_muestreo = struct("coast",coast.Ts_prom,"id",idRun.Ts_prom, ...
+    "val",valRun.Ts_prom,"jitter_max",max([coast.jitter_max_s,idRun.jitter_max_s,valRun.jitter_max_s]));
+modelo.ajuste = parametros;
+rutaMat = fullfile(carpetaResultados, "modelo_planta_identificado.mat");
 save(rutaMat, "modelo", "Gp", "Gp_sin_retardo");
 fprintf("Modelo guardado en:\n  %s\n", rutaMat);
 
@@ -392,134 +386,7 @@ fprintf("Modelo guardado en:\n  %s\n", rutaMat);
 %  FUNCIONES AUXILIARES LOCALES
 % ========================================================================
 
-function ensayo = cargarEnsayoCSV(rutaArchivo, usarFiltrada, omegaMinValida)
-% Carga un CSV de la ESP32 y detecta automaticamente el instante t = 0
-% del corte del motor / inicio del escalon, siendo tolerante a variaciones
-% menores en la columna 'phase' o en el origen de 't_ms'.
-
-    if ~isfile(rutaArchivo)
-        error("No se encontro el archivo CSV: %s", rutaArchivo);
-    end
-
-    opts = detectImportOptions(rutaArchivo);
-    opts.VariableNamingRule = "preserve";
-    T = readtable(rutaArchivo, opts);
-    nombres = string(T.Properties.VariableNames);
-
-    % Tiempo en segundos
-    if any(nombres == "t_ms")
-        t_s = double(T.t_ms) / 1000.0;
-    elseif any(nombres == "t_s")
-        t_s = double(T.t_s);
-    else
-        error("El CSV %s debe contener la columna 't_ms' o 't_s'.", rutaArchivo);
-    end
-
-    % Velocidad angular en rad/s
-    if usarFiltrada && any(nombres == "rad_s") && any(double(T.rad_s) > 0)
-        w = double(T.rad_s);
-    elseif usarFiltrada && any(nombres == "rpm_filt")
-        w = double(T.rpm_filt) * (2 * pi / 60);
-    elseif any(nombres == "rpm_raw")
-        w = double(T.rpm_raw) * (2 * pi / 60);
-    elseif any(nombres == "rad_s")
-        w = double(T.rad_s);
-    else
-        error("El CSV %s debe contener 'rad_s', 'rpm_filt' o 'rpm_raw'.", rutaArchivo);
-    end
-
-    % Accion de freno u_brake
-    if any(nombres == "u_brake")
-        u = double(T.u_brake);
-    elseif any(nombres == "u")
-        u = double(T.u);
-    else
-        u = zeros(size(t_s));
-    end
-
-    % PWM de motor (opcional pero muy util para ubicar el corte exacto)
-    if any(nombres == "motor_pwm")
-        pwm = double(T.motor_pwm);
-    else
-        pwm = zeros(size(t_s));
-    end
-
-    % Deteccion robusta del indice de inicio del escalon (t = 0)
-    idx0 = [];
-    % 1) Si existe transicion de motor_pwm > 0 a motor_pwm == 0
-    idxMotorOn = find(pwm > 0, 1, "first");
-    if ~isempty(idxMotorOn)
-        idxOff = find(pwm(idxMotorOn:end) == 0, 1, "first");
-        if ~isempty(idxOff)
-            idx0 = idxMotorOn + idxOff - 1;
-        end
-    end
-    % 2) Si no hubo transicion de PWM, pero t_ms ya trae tiempos negativos (PRE)
-    if isempty(idx0) && any(t_s < 0)
-        idx0 = find(t_s >= 0, 1, "first");
-    end
-    % 3) Si hay escalon en u_brake > 0
-    if isempty(idx0) && any(u > 0)
-        idx0 = find(u > 0, 1, "first");
-    end
-    % 4) Respaldo: inicio del archivo
-    if isempty(idx0)
-        idx0 = 1;
-    end
-
-    % Re-centrar tiempo en t = 0 justo en el corte del motor
-    t_rel = t_s - t_s(idx0);
-
-    % Velocidad inicial w0: promedio de las ultimas muestras justo antes/en t = 0
-    idxPreIni = max(1, idx0 - 4);
-    w0 = mean(w(idxPreIni:idx0));
-
-    % Segmento posterior al corte (t >= 0)
-    t_post = t_rel(idx0:end);
-    w_post = w(idx0:end);
-    u_post = u(idx0:end);
-
-    % Recorte de la region valida (antes de que caiga por debajo de omegaMinValida)
-    idxBaja = find(w_post <= omegaMinValida, 1, "first");
-    if isempty(idxBaja)
-        idxFinVal = numel(t_post);
-    else
-        idxFinVal = max(5, idxBaja - 1);
-    end
-
-    ensayo.archivo = rutaArchivo;
-    ensayo.t_full  = t_rel;
-    ensayo.w_full  = w;
-    ensayo.u_full  = u;
-    ensayo.t_val   = t_post(1:idxFinVal);
-    ensayo.w_val   = w_post(1:idxFinVal);
-    ensayo.u_val   = u_post(1:idxFinVal);
-    ensayo.w0      = w0;
-    ensayo.u0      = median(u_post(1:idxFinVal));
-    ensayo.Ts_prom = median(diff(t_post(1:idxFinVal)));
-end
-
-function w = evaluarCoastdown(a, c0, t, w0)
-% Solucion analitica de w_dot + a*w + c0 = 0 con w(0) = w0, truncada en >= 0
-    if a > 1e-4
-        w = (w0 + c0 / a) .* exp(-a .* t) - c0 / a;
-    else
-        w = w0 - c0 .* t;
-    end
-    w = max(0, w);
-end
-
-function dw = evaluarDeltaW(Kb_J, a, L, u0, t)
-% Respuesta al escalon incremental local con retardo puro L (Tarea 2, Ec. 6)
-    dw = zeros(size(t));
-    mascara = t >= L;
-    ts = t(mascara) - L;
-    if a > 1e-4
-        dw(mascara) = -(Kb_J * u0 / a) .* (1 - exp(-a .* ts));
-    else
-        dw(mascara) = -(Kb_J * u0) .* ts;
-    end
-end
+end % caracterizacion_planta
 
 function [rmse, r2] = calcularMetricas(yReal, yPred)
     err = yReal(:) - yPred(:);
@@ -533,10 +400,10 @@ function [rmse, r2] = calcularMetricas(yReal, yPred)
     end
 end
 
-function fig = crearFiguraClara(tituloVentana, posicion)
+function fig = crearFiguraClara(tituloVentana, posicion, visibilidad)
 % Fuerza tema claro (fondo blanco, ejes y etiquetas oscuras) incluso si
 % MATLAB R2025a+/R2026b esta en modo oscuro, ideal para exportar al PDF.
-    fig = figure("Name", tituloVentana, "Color", "w", "Position", posicion);
+    fig = figure("Name", tituloVentana, "Color", "w", "Position", posicion, "Visible", visibilidad);
     try
         theme(fig, "light");
     catch
