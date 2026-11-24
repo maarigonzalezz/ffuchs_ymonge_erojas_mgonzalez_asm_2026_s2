@@ -214,11 +214,20 @@ void pwmWrite(int pin, int ch, uint32_t duty) {
 }
 
 // ---------- Actuadores ----------
+// Ultimo duty realmente escrito a cada canal LEDC (-1 = desconocido, fuerza escritura).
+// Reescribir el mismo duty en cada tick de 20 ms retrasaba el loop y metia pulsos falsos
+// en el sensor IR, asi que solo se toca el hardware cuando el valor cambia.
+int32_t lastMotorDuty = -1;
+int32_t lastServoDuty = -1;
+
 void setMotorPWM(int pwm) {
   if (pwm < 0 || !outputsReady) pwm = 0;
   if (pwm > MOTOR_PWM_MAX) pwm = MOTOR_PWM_MAX;
   motorPwm = pwm;
-  pwmWrite(PIN_MOTOR_PWM, LEDC_CH_MOTOR, (uint32_t)pwm);
+  if (pwm != lastMotorDuty) {
+    pwmWrite(PIN_MOTOR_PWM, LEDC_CH_MOTOR, (uint32_t)pwm);
+    lastMotorDuty = pwm;
+  }
 }
 
 void servoWriteDeg(float deg) {
@@ -232,7 +241,10 @@ void servoWriteDeg(float deg) {
   float us = SERVO_MIN_US + (SERVO_MAX_US - SERVO_MIN_US) * (deg / 180.0f);
   uint32_t periodUs = 1000000UL / SERVO_FREQ_HZ;
   uint32_t duty = (uint32_t)(us * (float)(1UL << SERVO_BITS) / (float)periodUs);
-  pwmWrite(PIN_SERVO, LEDC_CH_SERVO, duty);
+  if ((int32_t)duty != lastServoDuty) {
+    pwmWrite(PIN_SERVO, LEDC_CH_SERVO, duty);
+    lastServoDuty = (int32_t)duty;
+  }
 }
 
 // u en [0,1]: 0 = liberado; >0 interpola entre CONTACT y MAX_SAFE.
