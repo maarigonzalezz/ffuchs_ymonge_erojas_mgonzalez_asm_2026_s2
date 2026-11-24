@@ -2,8 +2,10 @@
 
 Ejemplo: python3 captura_serial.py --port /dev/cu.usbserial-0001 \
   --cmd "step 180 0.4 3000 400 6000" --out step_u04_1.csv
-Lazo cerrado: --cmd "runpid 200 3000 1000 8000" --out runpid_1.csv (CSV de 15 columnas;
-las ganancias y la rampa se cargan antes con los comandos pid y ref del firmware).
+Lazo cerrado: --setup "pid 0.02 0 0 0.05" --setup "ref 40 5" --cmd "runpid 200 3000 1000 8000" \
+  --out runpid_1.csv (CSV de 15 columnas). Al abrir el puerto la ESP32 se reinicia y las ganancias
+y la rampa vuelven a sus valores por defecto (kp=ki=kd=0: no frena), por eso --setup las reenvia
+justo antes del comando del ensayo.
 Un CSV solo se publica tras END_CSV, RESULT satisfactorio y validacion de filas.
 En errores se conserva *.partial.csv y siempre se intenta enviar x.
 """
@@ -26,6 +28,23 @@ FLAG_U_MIN, FLAG_U_MAX, FLAG_ABS = 1, 2, 4   # bits de la columna flags (ver fir
 
 class CaptureError(RuntimeError):
     """Captura incompleta, rechazada o inconsistente con el firmware."""
+
+
+SETUP_COMMANDS = {"pid", "ref", "cfg"}
+
+
+def check_setup(setup):
+    """Comandos de configuracion permitidos antes del ensayo; sin letra x (el firmware la toma como parada)."""
+    cleaned = []
+    for command in setup:
+        command = command.strip()
+        parts = command.split()
+        if not parts or parts[0].lower() not in SETUP_COMMANDS:
+            raise ValueError("--setup solo admite comandos pid, ref o cfg.")
+        if not command.isascii() or not command.isprintable() or "x" in command.lower():
+            raise ValueError("Comando de configuracion invalido (ASCII imprimible y sin la letra x).")
+        cleaned.append(command)
+    return cleaned
 
 
 def is_pid_command(command):
@@ -242,7 +261,7 @@ class CaptureProtocol:
             raise CaptureError("Datos inesperados despues de END_CSV.")
 
 
-def capture(ser, destination, command="", timeout=20.0, clock=time.monotonic):
+def capture(ser, destination, command="", timeout=20.0, clock=time.monotonic, setup=()):
     """Captura un puerto ya abierto; conserva parcial y metadatos ante cualquier salida."""
     destination = Path(destination)
     partial = destination.with_suffix(".partial.csv")
@@ -251,13 +270,16 @@ def capture(ser, destination, command="", timeout=20.0, clock=time.monotonic):
         if path.exists():
             raise FileExistsError(f"No se sobrescribe: {path}")
     wait_timeout, data_timeout = capture_timeouts(command, timeout)
+    setup = check_setup(setup)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    metadata = {"command": command, "status": "incomplete", "result": None}
+    metadata = {"command": command, "setup": setup, "status": "incomplete", "result": None}
     protocol = None
     try:
         with partial.open("x", encoding="ascii", newline="") as handle:
             protocol = (CaptureProtocol(handle, HEADER_PID, SUCCESS_RESULTS_PID)
                         if is_pid_command(command) else CaptureProtocol(handle))
+            for line in setup:
+                ser.write((line + "\n").encode("ascii"))
             if command.strip():
                 ser.write((command.strip() + "\n").encode("ascii"))
             deadline = clock() + wait_timeout
@@ -316,6 +338,8 @@ def main():
     parser.add_argument("--port")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--cmd", default="")
+    parser.add_argument("--setup", action="append", default=[],
+                        help='comando previo (pid, ref o cfg); se puede repetir, p. ej. --setup "pid 0.02 0 0 0.05"')
     parser.add_argument("--out", default="")
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--list", action="store_true")
@@ -336,7 +360,7 @@ def main():
     with serial.Serial(args.port, args.baud, timeout=.2) as ser:
         time.sleep(1.8)
         ser.reset_input_buffer()
-        result = capture(ser, destination, args.cmd, args.timeout)
+        result = capture(ser, destination, args.cmd, args.timeout, setup=args.setup)
     print(f"Captura verificada: {result}")
 
 

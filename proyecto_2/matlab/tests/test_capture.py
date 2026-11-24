@@ -230,6 +230,31 @@ class CapturePidTests(unittest.TestCase):
                         'runpid 200 19 1000 8000', 'runpid 200 3000 1000 19', 'runpid 200 3000 1000 600001',
                         'runpid 200 3000 1000 8000 1', 'runpid 200 a 1000 8000', 'runpid -1 3000 1000 8000']:
             with self.subTest(command=command), self.assertRaises(ValueError): capture.capture_timeouts(command)
+    def test_setup_commands_are_sent_before_runpid_in_order(self):
+        clock = Clock()
+        serial = Serial(transcript_pid(), clock)
+        capture.capture(serial, self.path, self.CMD, timeout=.05, clock=clock,
+                        setup=['pid 0.02 0 0 0.05', ' ref 40 5 '])
+        self.assertEqual(serial.sent[:3], [b'pid 0.02 0 0 0.05\n', b'ref 40 5\n', b'runpid 200 3000 1000 8000\n'])
+        meta = json.loads(self.path.with_suffix('.capture.json').read_text())
+        self.assertEqual(meta['setup'], ['pid 0.02 0 0 0.05', 'ref 40 5'])
+    def test_setup_rejected_by_firmware_aborts_and_stops(self):
+        lines = [b'#ERR uso: pid <kp 0..100> <ki 0..1000> <kd 0..100> <tf 0..5 s>\n']
+        clock = Clock()
+        serial = Serial(lines, clock)
+        with self.assertRaises(capture.CaptureError):
+            capture.capture(serial, self.path, self.CMD, timeout=.05, clock=clock, setup=['pid 999 0 0 0'])
+        self.assertEqual(serial.sent[-1], b'x\n')
+        self.assertFalse(self.path.exists())
+    def test_invalid_setup_commands(self):
+        for bad in [['m 100'], ['step 150 0 3000 1000 10000'], ['runpid 200 3000 1000 8000'], [''], ['pid 1 1 1 1', 'x'],
+                    ['pid 1 1 1 1x'], ['ref 40 5\x00'], ['pid 1 1 1 \u00e9']]:
+            with self.subTest(setup=bad), self.assertRaises(ValueError):
+                capture.check_setup(bad)
+        self.assertEqual(capture.check_setup(['PID 1 1 1 1', 'cfg mp 4000']), ['PID 1 1 1 1', 'cfg mp 4000'])
+        with self.assertRaises(ValueError):
+            capture.capture(Serial([], Clock()), self.path, self.CMD, setup=['m 100'])
+        self.assertFalse(self.path.with_suffix('.partial.csv').exists())
     def test_fuzz_protocol_pid_never_completes_without_result(self):
         rng = random.Random(1111)
         for _ in range(10000):
