@@ -2,6 +2,8 @@
 
 Ejemplo: python3 captura_serial.py --port /dev/cu.usbserial-0001 \
   --cmd "step 180 0.4 3000 400 6000" --out step_u04_1.csv
+Lazo cerrado: --cmd "runpid 200 3000 1000 8000" --out runpid_1.csv (CSV de 15 columnas;
+las ganancias y la rampa se cargan antes con los comandos pid y ref del firmware).
 Un CSV solo se publica tras END_CSV, RESULT satisfactorio y validacion de filas.
 En errores se conserva *.partial.csv y siempre se intenta enviar x.
 """
@@ -15,11 +17,20 @@ from pathlib import Path
 import time
 
 HEADER = "t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses"
+HEADER_PID = ("t_ms,phase,ctrl_mode,motor_pwm,w_ref,w_meas,w_raw,error,u_brake,"
+              "p_term,i_term,d_term,servo_deg,pulses,flags")
 SUCCESS_RESULTS = {"parada_detectada", "duracion_maxima"}
+SUCCESS_RESULTS_PID = SUCCESS_RESULTS | {"w_final_alcanzada"}
+FLAG_U_MIN, FLAG_U_MAX, FLAG_ABS = 1, 2, 4   # bits de la columna flags (ver firmware)
 
 
 class CaptureError(RuntimeError):
     """Captura incompleta, rechazada o inconsistente con el firmware."""
+
+
+def is_pid_command(command):
+    parts = command.split()
+    return bool(parts) and parts[0].lower() == "runpid"
 
 
 def capture_timeouts(command, minimum=20.0):
@@ -28,6 +39,16 @@ def capture_timeouts(command, minimum=20.0):
     if not command.strip():
         return minimum, minimum
     parts = command.split()
+    if parts[0].lower() == "runpid":
+        if len(parts) != 5:
+            raise ValueError("Se esperaba: runpid <pwm> <spinup_ms> <pre_ms> <dur_ms>.")
+        if any(not parts[i].isascii() or not parts[i].isdigit() for i in range(1, 5)):
+            raise ValueError("PWM y tiempos deben ser enteros sin signo.")
+        pwm, spin, pre, duration = (int(parts[i]) for i in range(1, 5))
+        if (not 1 <= pwm <= 255 or not 20 <= spin <= 600000 or not 0 <= pre <= 600000
+                or not 20 <= duration <= 600000):
+            raise ValueError("Parametros fuera de los limites del firmware.")
+        return max(minimum, spin / 1000 + 5), max(minimum, (pre + duration) / 1000 + 5)
     if len(parts) != 6 or parts[0].lower() != "step":
         raise ValueError("Se esperaba: step <pwm> <u> <spinup_ms> <pre_ms> <dur_ms>.")
     if any(not parts[i].isascii() or not parts[i].isdigit() for i in (1, 3, 4, 5)):
@@ -46,8 +67,12 @@ def validate_csv(path, command=""):
     expected = command.split() if command.strip() else None
     with Path(path).open(newline="", encoding="ascii") as handle:
         reader = csv.DictReader(handle)
+        if reader.fieldnames == HEADER_PID.split(","):
+            return validate_pid_rows(reader, command)
         if reader.fieldnames != HEADER.split(","):
             raise CaptureError("Encabezado CSV incompatible.")
+        if is_pid_command(command):
+            raise CaptureError("El CSV no coincide con el comando solicitado.")
         previous_time = -math.inf
         previous_pulses = None
         braking = False
@@ -101,10 +126,82 @@ def validate_csv(path, command=""):
         return rows
 
 
+def validate_pid_rows(reader, command=""):
+    """CSV de runpid: PRE en lazo abierto (OPEN) y BRAKE con el PID (PID), sin rellenar nada."""
+    expected = command.split() if command.strip() else None
+    if expected and expected[0].lower() != "runpid":
+        raise CaptureError("El CSV no coincide con el comando solicitado.")
+    previous_time = -math.inf
+    previous_pulses = None
+    previous_ref = None
+    braking = False
+    rows = post_rows = 0
+    for row in reader:
+        if None in row or any(value is None for value in row.values()):
+            raise CaptureError("Fila con numero incorrecto de columnas.")
+        try:
+            values = {k: float(v) for k, v in row.items() if k not in ("phase", "ctrl_mode")}
+        except ValueError as exc:
+            raise CaptureError("Columna numerica invalida.") from exc
+        if not all(math.isfinite(v) for v in values.values()):
+            raise CaptureError("CSV con NaN o infinito.")
+        t, pwm, u, servo = (values[k] for k in ("t_ms", "motor_pwm", "u_brake", "servo_deg"))
+        wref, wmeas, wraw, err = (values[k] for k in ("w_ref", "w_meas", "w_raw", "error"))
+        p, i, d, flags = (values[k] for k in ("p_term", "i_term", "d_term", "flags"))
+        phase, mode = row["phase"].upper(), row["ctrl_mode"].upper()
+        if t <= previous_time:
+            raise CaptureError("Tiempo duplicado o no creciente.")
+        if pwm != int(pwm) or not 0 <= pwm <= 255 or not 0 <= u <= 1 or not 0 <= servo <= 180:
+            raise CaptureError("Actuador fuera de rango.")
+        if flags != int(flags) or not 0 <= flags <= 31:
+            raise CaptureError("Banderas invalidas.")
+        if wmeas < 0 or wraw < 0:
+            raise CaptureError("Velocidad negativa.")
+        if phase == "PRE":
+            if expected and pwm != int(expected[1]):
+                raise CaptureError("El CSV no coincide con el comando solicitado.")
+            if (braking or mode != "OPEN" or t >= 0 or pwm <= 0 or u != 0
+                    or any(v != 0 for v in (wref, err, p, i, d, flags))):
+                raise CaptureError("Fase PRE inconsistente.")
+        elif phase == "BRAKE":
+            if mode != "PID" or t < 0 or pwm != 0 or wref < 0:
+                raise CaptureError("Fase de frenado inconsistente.")
+            if previous_ref is not None and wref > previous_ref + 1e-3:
+                raise CaptureError("La referencia no es decreciente.")
+            if post_rows == 0 and abs(wref - wmeas) > 0.01:
+                raise CaptureError("La referencia no arranca en la velocidad medida.")
+            if abs(err - (wmeas - wref)) > 2e-3:
+                raise CaptureError("error no coincide con w_meas - w_ref.")
+            if not int(flags) & FLAG_ABS and abs(min(1.0, max(0.0, p + i + d)) - u) > 2e-3:
+                raise CaptureError("u_brake no coincide con P + I + D saturado.")
+            if int(flags) & FLAG_U_MIN and u > 1e-4:
+                raise CaptureError("Bandera u=0 con freno aplicado.")
+            if int(flags) & FLAG_U_MAX and u < 1 - 1e-4:
+                raise CaptureError("Bandera u=1 sin freno maximo.")
+            previous_ref = wref
+            braking = True
+            post_rows += 1
+        else:
+            raise CaptureError("Fase desconocida.")
+        pulses = values["pulses"]
+        if pulses != int(pulses) or not 0 <= pulses <= 4294967295:
+            raise CaptureError("Conteo de pulsos invalido.")
+        if previous_pulses is not None and pulses < previous_pulses:
+            if previous_pulses - pulses < 2147483648:
+                raise CaptureError("Conteo de pulsos retrocede.")
+        previous_time, previous_pulses = t, pulses
+        rows += 1
+    if post_rows < 2:
+        raise CaptureError("Se requieren al menos dos filas de frenado.")
+    return rows
+
+
 class CaptureProtocol:
     """Maquina de estados independiente del puerto serial para poder probarla."""
-    def __init__(self, handle):
+    def __init__(self, handle, header=HEADER, success=SUCCESS_RESULTS):
         self.handle = handle
+        self.header = header
+        self.success = success
         self.state = "WAIT_START"
         self.result = None
         self.header_seen = False
@@ -122,7 +219,7 @@ class CaptureProtocol:
             self.state = "WAIT_RESULT"
         elif line.startswith("#RESULT "):
             self.result = line[8:].strip()
-            if self.state != "WAIT_RESULT" or self.result not in SUCCESS_RESULTS:
+            if self.state != "WAIT_RESULT" or self.result not in self.success:
                 raise CaptureError(f"Ensayo no valido: {self.result}")
             self.state = "DONE"
         elif line.startswith("#ERR"):
@@ -133,7 +230,7 @@ class CaptureProtocol:
             self.warnings.append(line)
         elif self.state == "CAPTURE":
             if not self.header_seen:
-                if line != HEADER:
+                if line != self.header:
                     raise CaptureError("Encabezado CSV incompatible.")
                 self.header_seen = True
             elif line.startswith("#"):
@@ -159,7 +256,8 @@ def capture(ser, destination, command="", timeout=20.0, clock=time.monotonic):
     protocol = None
     try:
         with partial.open("x", encoding="ascii", newline="") as handle:
-            protocol = CaptureProtocol(handle)
+            protocol = (CaptureProtocol(handle, HEADER_PID, SUCCESS_RESULTS_PID)
+                        if is_pid_command(command) else CaptureProtocol(handle))
             if command.strip():
                 ser.write((command.strip() + "\n").encode("ascii"))
             deadline = clock() + wait_timeout

@@ -134,4 +134,111 @@ class CaptureTests(unittest.TestCase):
             self.assertNotEqual(protocol.state,'DONE')
 
 
+def transcript_pid(result='w_final_alcanzada'):
+    """Lazo cerrado coherente: u = clamp(P + I + D), error = w_meas - w_ref, rampa decreciente."""
+    return [b'#START_CSV\n', (capture.HEADER_PID+'\n').encode(),
+            b'-20.000,PRE,OPEN,200,0.0000,40.0000,40.0283,0.0000,0.0000,0.0000,0.0000,0.0000,44.00,650,0\n',
+            b'0.000,BRAKE,PID,0,40.0000,40.0000,40.0283,0.0000,0.0000,0.0000,0.0000,0.0000,44.00,651,1\n',
+            b'20.000,BRAKE,PID,0,39.4000,40.2000,40.1000,0.8000,0.1000,0.0400,0.0600,0.0000,49.40,652,0\n',
+            b'40.000,BRAKE,PID,0,38.8000,38.8000,38.9000,0.0000,0.2000,0.0600,0.1400,0.0000,49.80,653,0\n',
+            b'#END_CSV\n', f'#RESULT {result}\n'.encode()]
+
+
+class CapturePidTests(unittest.TestCase):
+    CMD = 'runpid 200 3000 1000 8000'
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.path = Path(self.temp.name)/'pid.csv'
+        self.addCleanup(self.temp.cleanup)
+    def run_capture(self, lines, command=CMD):
+        clock = Clock()
+        serial = Serial(lines, clock)
+        try:
+            capture.capture(serial, self.path, command, timeout=.05, clock=clock)
+        finally:
+            self.assertEqual(serial.sent[-1], b'x\n')
+        return serial
+    def rejects(self, lines, command=CMD):
+        with tempfile.TemporaryDirectory() as folder:
+            self.path = Path(folder)/'pid.csv'
+            with self.assertRaises(capture.CaptureError): self.run_capture(lines, command)
+            self.assertFalse(self.path.exists())
+    def test_valid_runpid_capture_and_command_sent(self):
+        serial = self.run_capture(transcript_pid())
+        self.assertEqual(serial.sent[0], b'runpid 200 3000 1000 8000\n')
+        self.assertEqual(capture.validate_csv(self.path, self.CMD), 4)
+        meta = json.loads(self.path.with_suffix('.capture.json').read_text())
+        self.assertEqual((meta['status'], meta['result']), ('complete', 'w_final_alcanzada'))
+    def test_other_valid_results(self):
+        for result in ['parada_detectada', 'duracion_maxima']:
+            with self.subTest(result=result), tempfile.TemporaryDirectory() as folder:
+                self.path = Path(folder)/'pid.csv'
+                self.run_capture(transcript_pid(result))
+    def test_w_final_is_not_valid_for_step(self):
+        lines = transcript('w_final_alcanzada')
+        with self.assertRaises(capture.CaptureError): self.run_capture_step(lines)
+    def run_capture_step(self, lines):
+        clock = Clock()
+        capture.capture(Serial(lines, clock), self.path, 'step 150 .4 20 20 1000', timeout=.05, clock=clock)
+    def test_failed_runs_never_published(self):
+        for reason in ['cancelado: motor PWM=0, freno liberado',
+                       'error_sin_velocidad_inicial: w <= w_stop, no se inicia el PID',
+                       'error_buffer_serial: captura incompleta']:
+            with self.subTest(reason=reason): self.rejects(transcript_pid(reason))
+    def test_header_and_command_must_agree(self):
+        self.rejects(transcript_pid(), 'step 150 .4 20 20 1000')      # CSV de 15 columnas con comando step
+        self.rejects(transcript(), self.CMD)                           # CSV de 9 columnas con comando runpid
+    def test_pre_must_match_command_pwm(self):
+        self.rejects(transcript_pid(), 'runpid 180 3000 1000 8000')
+    def test_corrupt_pid_rows(self):
+        base = transcript_pid()
+        bad_rows = [
+            b'20.000,BRAKE,PID,0,39.4000,40.2000,40.1000,0.9000,0.1000,0.0400,0.0600,0.0000,49.40,652,0\n',  # error mal calculado
+            b'20.000,BRAKE,PID,0,39.4000,40.2000,40.1000,0.8000,0.5000,0.0400,0.0600,0.0000,49.40,652,0\n',  # u != P+I+D
+            b'20.000,BRAKE,PID,0,40.4000,40.2000,40.1000,-0.2000,0.0000,0.0000,0.0000,0.0000,44.00,652,1\n', # ref sube
+            b'20.000,BRAKE,OPEN,0,39.4000,40.2000,40.1000,0.8000,0.1000,0.0400,0.0600,0.0000,49.40,652,0\n', # modo
+            b'20.000,BRAKE,PID,1,39.4000,40.2000,40.1000,0.8000,0.1000,0.0400,0.0600,0.0000,49.40,652,0\n', # motor en freno
+            b'20.000,BRAKE,PID,0,39.4000,40.2000,40.1000,0.8000,0.1000,0.0400,0.0600,0.0000,49.40,652,2\n', # flag u=1 con u=.1
+            b'20.000,BRAKE,PID,0,39.4000,40.2000,40.1000,0.8000,0.1000,0.0400,0.0600,0.0000,49.40,652,32\n', # flags fuera de rango
+            b'20.000,BRAKE,PID,0,39.4000,nan,40.1000,0.8000,0.1000,0.0400,0.0600,0.0000,49.40,652,0\n',     # nan
+            b'20.000,BRAKE,PID,0,39.4000,40.2000,40.1000,0.8000,0.1000,0.0400,0.0600,0.0000,49.40,600,0\n', # pulsos retroceden
+        ]
+        for bad in bad_rows:
+            with self.subTest(row=bad[:60]):
+                lines = list(base); lines[4] = bad
+                self.rejects(lines)
+    def test_first_brake_row_starts_at_measured_speed(self):
+        lines = transcript_pid()
+        lines[3] = b'0.000,BRAKE,PID,0,45.0000,40.0000,40.0283,-5.0000,0.0000,0.0000,0.0000,0.0000,44.00,651,1\n'
+        self.rejects(lines)
+    def test_pre_rows_must_have_zero_pid_fields(self):
+        lines = transcript_pid()
+        lines[2] = b'-20.000,PRE,OPEN,200,40.0000,40.0000,40.0283,0.0000,0.0000,0.0000,0.0000,0.0000,44.00,650,0\n'
+        self.rejects(lines)
+    def test_abs_flag_skips_sum_check(self):
+        lines = transcript_pid()
+        lines[4] = b'20.000,BRAKE,PID,0,39.4000,40.2000,40.1000,0.8000,0.6000,0.0400,0.0600,0.0000,52.00,652,4\n'
+        self.run_capture(lines)    # con ABS activo u puede diferir de P+I+D
+    def test_saturation_flags_accepted(self):
+        lines = transcript_pid()
+        lines[4] = b'20.000,BRAKE,PID,0,39.4000,50.0000,50.0000,10.6000,1.0000,0.6000,0.9000,0.0000,53.00,652,18\n'
+        self.run_capture(lines)
+    def test_timeouts_for_runpid(self):
+        wait, data = capture.capture_timeouts('runpid 1 600000 600000 600000')
+        self.assertGreater(wait, 600); self.assertGreater(data, 1200)
+        for command in ['runpid', 'runpid 200 3000 1000', 'runpid 0 3000 1000 8000', 'runpid 256 3000 1000 8000',
+                        'runpid 200 19 1000 8000', 'runpid 200 3000 1000 19', 'runpid 200 3000 1000 600001',
+                        'runpid 200 3000 1000 8000 1', 'runpid 200 a 1000 8000', 'runpid -1 3000 1000 8000']:
+            with self.subTest(command=command), self.assertRaises(ValueError): capture.capture_timeouts(command)
+    def test_fuzz_protocol_pid_never_completes_without_result(self):
+        rng = random.Random(1111)
+        for _ in range(10000):
+            protocol = capture.CaptureProtocol(io.StringIO(), capture.HEADER_PID, capture.SUCCESS_RESULTS_PID)
+            lines = [rng.choice(['#START_CSV', '#END_CSV', capture.HEADER_PID, capture.HEADER, 'garbage', '#ERR nope', '#WARN nope']) for _ in range(rng.randrange(1, 20))]
+            try:
+                for line in lines: protocol.accept(line)
+            except capture.CaptureError: pass
+            self.assertNotEqual(protocol.state, 'DONE')
+
+
 if __name__ == '__main__': unittest.main()
