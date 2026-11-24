@@ -65,9 +65,21 @@ function generarSuiteRunpid(folder, p)
 
     % --- 2. Etapa 6: 2 velocidades x {open, pid} x 3 repeticiones = 12 CSV ---
     velocidades = [ ...
-        struct("tag","v1","rpm0",320,"pwmIni",150,"r_ref",15.5,"uOpen",0.28), ...
-        struct("tag","v2","rpm0",450,"pwmIni",210,"r_ref",20.5,"uOpen",0.42) ...
+        struct("tag","v1","rpm0",320,"pwmIni",150,"r_ref",15.5,"w_stop",baseCfg.w_stop,"uOpen",0.28), ...
+        struct("tag","v2","rpm0",450,"pwmIni",210,"r_ref",20.5,"w_stop",baseCfg.w_stop,"uOpen",0.42) ...
     ];
+    condiciones = struct( ...
+        "nota", "Parametros de rampa de referencia (rad/s) para evaluar IAE/RMSE en lazo abierto (step 9 cols) y PID.", ...
+        "formula", "w_ref(t) = max(w_stop, w0 - r_ref * max(0, t))", ...
+        "v1", velocidades(1), ...
+        "v2", velocidades(2) ...
+    );
+    fidCond = fopen(fullfile(dirFinales, "condiciones_ejemplo.json"), "w");
+    if fidCond >= 0
+        cleanupCond = onCleanup(@() fclose(fidCond));
+        fprintf(fidCond, "%s\n", jsonencode(condiciones, "PrettyPrint", true));
+        clear cleanupCond;
+    end
     for v = velocidades
         for rep = 1:3
             % Variacion realista de condiciones iniciales y friccion entre repeticiones
@@ -236,8 +248,8 @@ function T = simulateRunpidTrial(p, cfg)
         w_meas(i) = wFilt;
         pulses(i) = floor(angle * p.P / (2 * pi));
 
-        % Referencia decreciente realizable
-        wRefNow = max(cfg.w_stop, wRef0 - cfg.r_ref * t(i));
+        % Referencia decreciente realizable (misma formula que frenado.referenciaRampa)
+        wRefNow = frenado.referenciaRampa(t(i), wRef0, cfg.r_ref, cfg.w_stop);
         w_ref(i) = wRefNow;
         flagBits = uint32(0);
 

@@ -259,6 +259,13 @@ function testRunpidLoaderAndGeneratedSuite(test)
     verifyTrue(test,any(absRun.banderas.abs_activo));
     gsRun=frenado.cargarEnsayoCSV(fullfile(folder,"extras","e4_gs_on.csv"),true);
     verifyTrue(test,any(gsRun.banderas.gs_baja));
+
+    % Verifica condiciones_ejemplo.json y helper frenado.referenciaRampa
+    condPath=fullfile(folder,"finales","condiciones_ejemplo.json");
+    verifyTrue(test,isfile(condPath));
+    cond=jsondecode(fileread(condPath));
+    wRef=frenado.referenciaRampa([0;0.5;5.0],40.0,cond.v1.r_ref,cond.v1.w_stop);
+    verifyEqual(test,wRef,[40.0;40.0-0.5*cond.v1.r_ref;cond.v1.w_stop],"AbsTol",1e-12);
 end
 
 function testRunpidCaptureProtocolAndTimeouts(test)
