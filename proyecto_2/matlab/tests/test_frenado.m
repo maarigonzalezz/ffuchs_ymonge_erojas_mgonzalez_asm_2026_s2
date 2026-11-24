@@ -208,6 +208,90 @@ function testCompletePipeline(test)
     verifyEqual(test,numel(dir(fullfile(model.carpeta_resultados,"figuras","*.png"))),4);
 end
 
+function testRunpidSchemaAndValidation(test)
+    folder=string(tempname(test.TestData.temp));
+    generar_datos_ejemplo(folder);
+    pidPath=fullfile(folder,"ajuste","ajuste_PID.csv");
+    T=frenado.leerCSV(pidPath);
+    verifyTrue(test,ismember("ctrl_mode",string(T.Properties.VariableNames)));
+    verifyEqual(test,unique(T.ctrl_mode(T.phase=="PID")),"PID");
+
+    % Error inconsistente con w_meas - w_ref en modo PID
+    badErr=T;
+    idxPid=find(T.phase=="PID",1);
+    badErr.error(idxPid)=badErr.error(idxPid)+2.0;
+    verifyError(test,@() frenado.validarTabla(badErr),"frenado:ErrorConsistency");
+
+    % Flags no enteros o negativos
+    badFlags=T; badFlags.flags(idxPid)=-1;
+    verifyError(test,@() frenado.validarTabla(badFlags),"frenado:Flags");
+
+    % ctrl_mode invalido
+    badMode=T; badMode.ctrl_mode(idxPid)="AUTO";
+    verifyError(test,@() frenado.validarTabla(badMode),"frenado:CtrlMode");
+
+    % En ctrl_mode=OPEN la accion debe ser constante
+    openPath=fullfile(folder,"finales","v1_open_rep1.csv");
+    Topen=frenado.leerCSV(openPath);
+    verifyEqual(test,unique(Topen.ctrl_mode(Topen.phase=="PID")),"OPEN");
+    badOpen=Topen;
+    idxOpen=find(Topen.phase=="PID",1,"last");
+    badOpen.u_brake(idxOpen)=min(1,badOpen.u_brake(idxOpen)+0.2);
+    verifyError(test,@() frenado.validarTabla(badOpen),"frenado:VariableBrake");
+end
+
+function testRunpidLoaderAndGeneratedSuite(test)
+    folder=string(tempname(test.TestData.temp));
+    generar_datos_ejemplo(folder);
+    verifyEqual(test,numel(dir(fullfile(folder,"ajuste","*.csv"))),3);
+    verifyEqual(test,numel(dir(fullfile(folder,"finales","*.csv"))),12);
+    verifyEqual(test,numel(dir(fullfile(folder,"extras","*.csv"))),9);
+
+    run=frenado.cargarEnsayoCSV(fullfile(folder,"ajuste","ajuste_PID.csv"),true);
+    verifyEqual(test,run.formato,"runpid");
+    verifyEqual(test,run.ctrl_mode,"PID");
+    verifyEqual(test,run.t_val(1),0);
+    verifyTrue(test,isfield(run,"w_ref_val") && isfield(run,"banderas"));
+    verifyEqual(test,numel(run.error_val),numel(run.t_val));
+
+    % Verifica que E3 active bit 2 (antibloqueo) y E4 active bit 3 (region baja GS)
+    absRun=frenado.cargarEnsayoCSV(fullfile(folder,"extras","e3_abs_on.csv"),true);
+    verifyTrue(test,any(absRun.banderas.abs_activo));
+    gsRun=frenado.cargarEnsayoCSV(fullfile(folder,"extras","e4_gs_on.csv"),true);
+    verifyTrue(test,any(gsRun.banderas.gs_baja));
+
+    % Verifica condiciones_ejemplo.json y helper frenado.referenciaRampa
+    condPath=fullfile(folder,"finales","condiciones_ejemplo.json");
+    verifyTrue(test,isfile(condPath));
+    cond=jsondecode(fileread(condPath));
+    wRef=frenado.referenciaRampa([0;0.5;5.0],40.0,cond.v1.r_ref,cond.v1.w_stop);
+    verifyEqual(test,wRef,[40.0;40.0-0.5*cond.v1.r_ref;cond.v1.w_stop],"AbsTol",1e-12);
+end
+
+function testRunpidCaptureProtocolAndTimeouts(test)
+    [wait,data]=frenado.tiemposCaptura("runpid 180 3000 400 6000",20);
+    verifyGreaterThanOrEqual(test,wait,20);
+    verifyGreaterThanOrEqual(test,data,20);
+    verifyError(test,@() frenado.tiemposCaptura("runpid 0 3000 400 6000",20),"frenado:Command");
+
+    lines=[ ...
+        "#START_CSV"; ...
+        "t_ms,phase,ctrl_mode,motor_pwm,w_ref,w_meas,w_raw,error,u_brake,p_term,i_term,d_term,servo_deg,pulses,flags"; ...
+        "-20,PRE,PID,180,40.0,40.0,40.1,0,0,0,0,0,44,10,0"; ...
+        "0,PID,PID,0,40.0,40.0,40.0,0.0,0.0,0.0,0.0,0.0,44,12,1"; ...
+        "20,PID,PID,0,39.6,39.9,40.0,0.3,0.03,0.02,0.01,0.0,49.12,14,0"; ...
+        "#END_CSV"; ...
+        "#RESULT parada_detectada" ...
+    ];
+    [read,send,get]=fakeStream(lines);
+    path=string(tempname(test.TestData.temp))+".csv";
+    frenado.capturarFlujo(read,send,path,"runpid 180 20 20 1000",TimeoutSeg=.05,MostrarEnConsola=false);
+    verifyTrue(test,isfile(path));
+    verifyEqual(test,get(),["runpid 180 20 20 1000","x"]);
+    T=frenado.leerCSV(path);
+    verifyEqual(test,height(T),3);
+end
+
 function path=writeTrial(test,T)
     path=string(tempname(test.TestData.temp))+".csv";writetable(T,path);
 end

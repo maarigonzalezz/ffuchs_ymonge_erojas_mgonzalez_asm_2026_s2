@@ -133,5 +133,40 @@ class CaptureTests(unittest.TestCase):
             except capture.CaptureError: pass
             self.assertNotEqual(protocol.state,'DONE')
 
+    def test_runpid_capture_and_validation(self):
+        lines = [
+            b'#START_CSV\n',
+            (capture.HEADER_RUNPID + '\n').encode(),
+            b'-20,PRE,PID,180,40.0,40.0,40.1,0,0,0,0,0,44,10,0\n',
+            b'0,PID,PID,0,40.0,40.0,40.0,0.0,0.0,0.0,0.0,0.0,44,12,1\n',
+            b'20,PID,PID,0,39.6,39.9,40.0,0.3,0.03,0.02,0.01,0.0,49.12,14,0\n',
+            b'#END_CSV\n',
+            b'#RESULT parada_detectada\n',
+        ]
+        self.run_capture(lines, command='runpid 180 20 20 1000')
+        self.assertEqual(capture.validate_csv(self.path, 'runpid 180 20 20 1000'), 3)
+
+    def test_runpid_rejects_bad_error_and_flags(self):
+        bad_lines = [
+            b'20,PID,PID,0,39.6,39.9,40.0,5.0,0.03,0.02,0.01,0.0,49.12,14,0\n',
+            b'20,PID,PID,0,39.6,39.9,40.0,0.3,0.03,0.02,0.01,0.0,49.12,14,-1\n',
+            b'20,PID,AUTO,0,39.6,39.9,40.0,0.3,0.03,0.02,0.01,0.0,49.12,14,0\n',
+        ]
+        for bad in bad_lines:
+            with tempfile.TemporaryDirectory() as folder:
+                self.path = Path(folder) / 'pid.csv'
+                lines = [
+                    b'#START_CSV\n',
+                    (capture.HEADER_RUNPID + '\n').encode(),
+                    b'-20,PRE,PID,180,40.0,40.0,40.1,0,0,0,0,0,44,10,0\n',
+                    b'0,PID,PID,0,40.0,40.0,40.0,0.0,0.0,0.0,0.0,0.0,44,12,1\n',
+                    bad,
+                    b'#END_CSV\n',
+                    b'#RESULT parada_detectada\n',
+                ]
+                with self.assertRaises(capture.CaptureError):
+                    self.run_capture(lines, command='runpid 180 20 20 1000')
+                self.assertFalse(self.path.exists())
+
 
 if __name__ == '__main__': unittest.main()
