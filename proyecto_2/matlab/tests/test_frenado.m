@@ -351,6 +351,70 @@ function testM2DisenoPidEstabilidadYComandos(test)
     verifyEqual(test,numel(dir(fullfile(D.carpeta_resultados,"figuras","*.png"))),3);
 end
 
+function testE1IdentificacionSemiautomaticaConMock(test)
+    assumeTrue(test,~isempty(which("tf")),"Control System Toolbox no esta instalado.");
+
+    % Guardas de entrada: niveles repetidos y falta de puerto en modo real
+    verifyError(test,@() identificacion_semiautomatica("COM5",UIdent=0.4,UVal=0.42), ...
+        "frenado:InvalidStepLevels");
+    verifyError(test,@() identificacion_semiautomatica("",ModoEjemplo=false), ...
+        "frenado:Port");
+
+    % Simula captura serial completa con frenado.capturarFlujo (sin ESP32 fisica)
+    comandosRecibidos = strings(0,1);
+    function ruta = mockCaptura(~, cmd, nombre, carpeta)
+        comandosRecibidos(end+1) = cmd;
+        [~,~,parts] = frenado.tiemposCaptura(cmd, 20);
+        pwm = str2double(parts(2));
+        u   = str2double(parts(3));
+        T   = analyticTrial(0.28, 3.6, 22.5, 0.08, u);
+        T.motor_pwm(T.phase=="PRE") = pwm;
+        lines = tablaATranscript(T, "parada_detectada");
+        [read, send, ~] = fakeStream(lines);
+        ruta = fullfile(carpeta, nombre);
+        frenado.capturarFlujo(read, send, ruta, cmd, TimeoutSeg=5, MostrarEnConsola=false);
+    end
+
+    res = identificacion_semiautomatica("MOCK_PORT", ...
+        PwmIni=180, UIdent=0.40, UVal=0.70, PausaEntreEnsayosSeg=0, ...
+        FuncionCaptura=@mockCaptura, ...
+        CarpetaBaseDatos=test.TestData.temp, ...
+        CarpetaResultados=test.TestData.temp, ...
+        GuardarFiguras=false, MostrarFiguras=false);
+
+    verifyEqual(test,numel(comandosRecibidos),3);
+    verifyTrue(test,startsWith(comandosRecibidos(1),"step 180 0 "));
+    verifyTrue(test,startsWith(comandosRecibidos(2),"step 180 0.4 "));
+    verifyTrue(test,startsWith(comandosRecibidos(3),"step 180 0.7 "));
+    verifyTrue(test,res.validacion_ok);
+    verifyGreaterThan(test,res.modelo.r2_val,0.99);
+    verifyTrue(test,res.estable_z);
+    verifyTrue(test,startsWith(res.cmd_pid,"pid "));
+    verifyTrue(test,isfile(res.ruta_resumen_json));
+
+    % Tambien verificar ModoEjemplo=true de punta a punta
+    resEj = identificacion_semiautomatica("", ModoEjemplo=true, ...
+        CarpetaBaseDatos=test.TestData.temp, ...
+        CarpetaResultados=test.TestData.temp, ...
+        GuardarFiguras=false, MostrarFiguras=false);
+    verifyTrue(test,resEj.modo_ejemplo);
+    verifyTrue(test,resEj.validacion_ok);
+    verifyTrue(test,resEj.estable_z);
+end
+
+function lines = tablaATranscript(T, result)
+    n = height(T);
+    body = strings(n, 1);
+    for i = 1:n
+        body(i) = sprintf("%.3f,%s,%d,%.4f,%.2f,%.4f,%.4f,%.5f,%d", ...
+            T.t_ms(i), T.phase(i), T.motor_pwm(i), T.u_brake(i), T.servo_deg(i), ...
+            T.rpm_raw(i), T.rpm_filt(i), T.rad_s(i), T.pulses(i));
+    end
+    lines = ["#START_CSV"; ...
+             "t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses"; ...
+             body; "#END_CSV"; "#RESULT " + result];
+end
+
 function path=writeTrial(test,T)
     path=string(tempname(test.TestData.temp))+".csv";writetable(T,path);
 end
