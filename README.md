@@ -1,7 +1,7 @@
 # ffuchs_ymonge_erojas_mgonzalez_asm_2026_s2
 
 Repositorio grupal para **CE 1110 — Análisis de Señales Mixtas** (Instituto Tecnológico de Costa Rica).  
-**Sistema:** Banco didáctico de frenado de disco con **ESP32 clásica**, actuador de freno por servomotor **MG996**, sensor óptico **IR AD33838** y caracterización/control digital en **MATLAB** (Tarea 2 y Proyecto Grupal 2).
+**Sistema:** Banco didáctico de frenado de disco con **ESP32 clásica**, actuador de freno por servomotor **MG996**, sensor óptico **IR AD33838** y suite de modelado, diseño PID y evaluación en **MATLAB** (Tarea 2 y Proyecto Grupal 2).
 
 ---
 
@@ -9,16 +9,37 @@ Repositorio grupal para **CE 1110 — Análisis de Señales Mixtas** (Instituto 
 
 ```text
 proyecto_2/
+├── PLAN_DE_TRABAJO_PROYECTO_2.md             # Plan maestro incremental (requisitos mínimos y extras)
 └── matlab/
-    ├── caracterizacion_planta.m      # Script principal: identifica Gp,L(s), grafica escalon e impulse()
-    ├── captura_serial_esp32.m        # Captura directa ESP32 -> CSV desde MATLAB (serialport)
-    ├── captura_serial.py             # Alternativa ligera en Python (pyserial)
-    ├── generar_datos_ejemplo.m       # Genera CSV sinteticos con el formato exacto de la ESP32
-    ├── datos/                        # (Se crea al capturar) CSV reales de la maqueta
-    ├── datos_ejemplo/                # CSV sinteticos para probar el pipeline sin hardware
-    ├── figuras/                      # Graficas exportadas automaticamente en 300 dpi
-    ├── docs/capturas/                # Capturas de esta guia
-    └── modelo_planta_identificado.mat# Modelo identificado (Gp, Gp_sin_retardo, metricas)
+    ├── +frenado/                             # Paquete compartido (lectura, validación, identificación, rampas)
+    │   ├── leerCSV.m                         # Lector dual para formato step (9 cols) y runpid (15 cols)
+    │   ├── validarTabla.m                    # Validación estricta de esquema, rangos, fases y flags
+    │   ├── cargarEnsayoCSV.m                 # Normaliza corte real (t=0); auto usa w_meas en runpid
+    │   ├── validarComandoTabla.m             # Verifica coherencia entre comando enviado y CSV
+    │   ├── tiemposCaptura.m                  # Validación de sintaxis y timeouts para step / runpid
+    │   ├── capturarFlujo.m                   # Máquina de estados serial verificable (#START_CSV..#RESULT)
+    │   ├── identificar.m                     # Ajuste FOPDT acotado (coast-down + escalón con retardo L)
+    │   ├── evaluarCoastdown.m                # Solución analítica de pérdidas naturales
+    │   ├── evaluarDeltaW.m                   # Respuesta incremental local al escalón con retardo L
+    │   ├── respuestaEscalon.m                # Evaluación de step(u*Gp) preservando jitter temporal real
+    │   └── referenciaRampa.m                 # Fórmula única w_ref(t) = max(w_stop, w0 - r_ref*max(0,t))
+    ├── caracterizacion_planta.m              # M1 (Etapa 3): identifica Gp,L(s), valida e impulse(Gp)
+    ├── diseno_pid.m                          # M2 (Etapa 4): c2d(ZOH), plano Z, rampas y simulación PID
+    ├── identificacion_semiautomatica.m       # E1 (+2 pts): captura 3 ensayos + ajusta + sugiere PID
+    ├── captura_serial_esp32.m                # Captura directa ESP32 -> CSV desde MATLAB (serialport)
+    ├── captura_serial.py                     # Alternativa ligera en Python (pyserial)
+    ├── generar_datos_ejemplo.m               # Genera CSV sintéticos (step 9 cols + runpid 15 cols)
+    ├── modelo_planta_identificado.mat        # Modelo canónico (Gp, a, c0, Kb_J, L)
+    ├── diseno_pid_resultado.mat              # Ganancias, Cz, Tz_d y rampas de diseno_pid.m
+    ├── condiciones_diseno.json               # Pares (r_ref, w_stop) y comandos pid/ref en JSON
+    ├── datos/                                # CSV reales de la maqueta y metadatos .capture.json
+    ├── datos_ejemplo/                        # CSV sintéticos (ajuste/, finales/ + condiciones_ejemplo.json, extras/)
+    ├── figuras/                              # Figuras base de referencia
+    ├── docs/                                 # Capturas de guía y CONTEXTO_EVALUACION_MARIANA.md
+    └── tests/
+        ├── test_frenado.m                    # Suite unitaria y de integración en MATLAB (28 tests)
+        ├── test_capture.py                   # Suite de protocolo serial en Python (15 tests + fuzz)
+        └── validation_summary.json           # Resumen verificado y hashes SHA-256
 ```
 
 ---
@@ -27,86 +48,71 @@ proyecto_2/
 
 | Subsistema | Componente | Pin ESP32 | Detalle clave |
 | :--- | :--- | :--- | :--- |
-| **Motor DC + Driver** | JGB37-520 ($12\text{ V}$, $600\text{ RPM}$) + XY-MOS + 1N4006 | `GPIO25` | PWM de potencia ($12\text{ V}/2\text{ A}$ externa) |
-| **Freno (actuador)** | Servomotor MG996 ($180^\circ$, engranajes metálicos) | `GPIO26` | Alimentado por portapilas 4xAA ($6\text{ V}$) |
-| **Sensor de velocidad** | Sensor óptico reflectivo IR `AD33838` (LM393) | `GPIO27` | Alimentado a `3V3`; disco $\varnothing 130\text{ mm}$ ($R = 0.065\text{ m}$) con **16 bloques negros y 16 blancos** ($P = 16$ pulsos/rev) |
-| **Botones (opcionales)** | Inicio / Parada de emergencia | `GPIO32` / `GPIO33` | `INPUT_PULLUP` |
+| **Motor DC + Driver** | JGB37-520 ($12\text{ V}$, $600\text{ RPM}$) + XY-MOS + 1N4006 | `GPIO25` | PWM de potencia ($20\text{ kHz}$, 8 bits, fuente $12\text{ V}/2\text{ A}$) |
+| **Freno (actuador)** | Servomotor MG996 ($180^\circ$, engranajes metálicos) | `GPIO26` | PWM $50\text{ Hz}$, 14 bits; alimentado por portapilas 4xAA ($6\text{ V}$) |
+| **Sensor de velocidad** | Sensor óptico reflectivo IR `AD33838` (LM393) | `GPIO27` | Alimentado a `3V3`; disco $\varnothing 130\text{ mm}$ ($R = 0.065\text{ m}$). El parámetro `PulsosPorRev` (`P`) vive en una sola constante arriba del `.ino` y de `caracterizacion_planta.m` |
+| **Botón de inicio** | Pulsador de arranque manual | `GPIO32` | `INPUT_PULLDOWN` (activo en `HIGH`) |
+| **Botón de parada** | Pulsador de parada de emergencia | `GPIO33` | `INPUT_PULLDOWN` (activo en `HIGH`; corta `PWM=0` y libera freno) |
 | **Referencia** | Tierra común (`GND`) | `GND` | Unir tierras de ESP32, XY-MOS ($12\text{ V}$), MG996 ($6\text{ V}$) y sensor IR |
 
 ---
 
 ## 3. Cómo funciona el módulo de MATLAB
 
-El flujo está separado en **captura** y **análisis**, de modo que el equipo puede probar todo con datos sintéticos mientras se termina el firmware `.ino` y el montaje físico:
+El lazo de control PID en tiempo real corre **100 % en la ESP32**. MATLAB actúa fuera de tiempo real para **captura verificada, modelado de la planta, diseño del PID y análisis experimental**:
 
 | Archivo | Propósito |
 | :--- | :--- |
-| `captura_serial_esp32.m` | Abre el puerto serial de la ESP32 a `115200` baudios, envía el comando `step ...`, escucha entre `#START_CSV` y `#END_CSV`, guarda el `.csv` en `proyecto_2/matlab/datos/` y envía parada segura (`x`) si se interrumpe con `Ctrl+C`. |
-| `captura_serial.py` | Misma captura serial usando Python (`pip install pyserial`), por si se prefiere capturar desde terminal. |
-| `generar_datos_ejemplo.m` | Simula la dinámica física del disco ($J\dot{\omega} + b\omega + \tau_c + \tau_b(u(t-L)) = 0$) y crea 3 CSV de prueba (`coastdown_1.csv`, `step_u04_1.csv`, `step_u07_1.csv`) con el formato exacto de la ESP32. |
-| `caracterizacion_planta.m` | Carga los 3 ensayos (*coast-down*, escalón de identificación y escalón de validación), estima $a = b/J$, $c_0 = \tau_c/J$, $K_b/J$ y el retardo del servo $L$, construye la función de transferencia local $G_{p,L}(s) = \frac{-K_b e^{-Ls}}{Js + b}$, valida contra datos no usados en el ajuste (`step`), genera la **respuesta al impulso en MATLAB (`impulse`)** y verifica polos/Bode frente a $T_s = 20\text{ ms}$. |
+| `captura_serial_esp32.m` | Abre el puerto serial a `115200` baudios, valida sintaxis y timeouts de `step` o `runpid`, escucha entre `#START_CSV` y `#END_CSV` + `#RESULT`, publica `.csv` y `.capture.json` en `datos/` y envía `x` al salir o ante `Ctrl+C`. |
+| `captura_serial.py` | Misma máquina de estados y validación en Python (`pip install pyserial`). |
+| `generar_datos_ejemplo.m` | Simula la dinámica no lineal del banco y genera CSV sintéticos tanto en formato `step` (`coastdown_1.csv`, `step_u04_1.csv`, `step_u07_1.csv`) como en formato `runpid` (`ajuste/`, `finales/` con `condiciones_ejemplo.json` y `extras/`). |
+| `caracterizacion_planta.m` | **(M1)** Carga *coast-down* + escalón ID + escalón de validación distinto, estima $a = b/J$, $c_0 = \tau_c/J$, $K_b/J$ y retardo $L$, construye $G_{p,L}(s) = \frac{-K_b e^{-Ls}}{Js + b}$, calcula `impulse(Gp)`, valida $R^2$ sobre ensayo nuevo y actualiza `modelo_planta_identificado.mat`. |
+| `diseno_pid.m` | **(M2)** Discretiza `Gp` con `c2d(..., 'zoh')`, compara retardo $z^{-d}$ vs. Padé, calcula ganancias $(K_p, K_i, K_d, T_f)$ en $\text{rad/s}$ garantizando polos de $T(z)$ dentro de $|z| < 1$, define rampas realizables (`V1`, `V2`), simula saturación `[0,1]` + *anti-windup*, imprime comandos `pid`/`ref` para la ESP32 y exporta `diseno_pid_resultado.mat` + `condiciones_diseno.json`. |
+| `identificacion_semiautomatica.m` | **(E1)** Orquestador de un solo comando: dispara *coast-down* + 2 escalones en la ESP32, ajusta y valida el modelo (`caracterizacion_planta`) y calcula automáticamente las ganancias PID y rampas sugeridas (`diseno_pid`). |
 
 ---
 
-## 4. Contrato de Entradas y Salidas (para acoplar el firmware `.ino`)
+## 4. Contratos de Entradas y Salidas (ESP32 ↔ MATLAB)
 
-Esta sección define el **acuerdo exacto entre el firmware de la ESP32 y MATLAB** para que ambos módulos encajen a la primera sin cambios manuales.
+### 4.1 Protocolo serial (`115200` baudios, fin de línea `LF` `\n`)
 
-### 4.1 Entradas que espera MATLAB desde la ESP32 (puerto serial)
+* **Comandos soportados:**
+  * `step <pwm_ini> <u_freno> <spinup_ms> <pre_ms> <dur_ms>` — ensayo a lazo abierto (*coast-down* con `u_freno = 0` o escalón fijo `u_freno > 0`).
+  * `runpid <pwm_ini> <spinup_ms> <pre_ms> <dur_ms>` — ensayo con el controlador PID digital en ESP32.
+  * `pid <kp> <ki> <kd> <tf>` y `ref <rate_rad_s2> <w_stop_rad_s>` — configuración en vivo de ganancias (en $\text{rad/s}$) y rampa de referencia.
+  * `x` — parada de emergencia inmediata (`motor_pwm = 0`, freno liberado).
+* **Marcadores obligatorios de captura:** `#START_CSV` antes del encabezado, `#END_CSV` al finalizar las muestras y `#RESULT parada_detectada` o `#RESULT duracion_maxima` al cierre.
 
-* **Velocidad serial:** `115200` baudios, fin de línea `LF` (`\n`, es decir, `Serial.println(...)`).
-* **Comandos que puede enviar `captura_serial_esp32.m` a la ESP32:**
-  * `step <pwm_ini> <u_freno> <spinup_ms> <pre_ms> <dur_ms>` — ejecuta un ensayo de *coast-down* (`u_freno = 0.0`) o de escalón de frenado (`u_freno > 0.0`).
-  * `x` — parada de emergencia inmediata (`motor_pwm = 0`, freno liberado `u_brake = 0`).
-* **Marcadores obligatorios de inicio y fin de archivo:**
-  * Antes del encabezado CSV, la ESP32 debe imprimir exactamente: `#START_CSV`
-  * Al terminar el ensayo, debe imprimir exactamente: `#END_CSV`
-  * Cualquier otro texto fuera de esos marcadores se muestra en consola como log (`[ESP32] ...`) y no ensucia el `.csv`.
-
-### 4.2 Formato exacto del archivo CSV (entrada de `caracterizacion_planta.m`)
-
-Encabezado obligatorio en la primera línea después de `#START_CSV`:
+### 4.2 Formato CSV `step` (9 columnas — lazo abierto)
 
 ```csv
 t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses
 ```
 
-| Columna | Tipo / Unidad | Descripción |
-| :--- | :--- | :--- |
-| `t_ms` | Entero ($\text{ms}$) | Marca de tiempo cada $T_s = 20\text{ ms}$. Idealmente $< 0$ en fase `PRE` y $\ge 0$ a partir del escalón (`STEP`). |
-| `phase` | Texto | Etapa del ensayo (ej. `PRE` antes del corte y `STEP` a partir del corte/frenado). |
-| `motor_pwm` | Entero (`0..255`) | Ciclo de trabajo aplicado al módulo XY-MOS (`GPIO25`). Debe caer a `0` exactamente al iniciar el escalón. |
-| `u_brake` | Float (`0.0..1.0`) | Acción normalizada de freno (`0.0` en *coast-down* / freno liberado; valor fijo $u_0 \in (0, 1]$ en el escalón). |
-| `servo_deg` | Float ($^\circ$) | Ángulo ordenado al servomotor MG996 (`GPIO26`). |
-| `rpm_raw` | Float ($\text{RPM}$) | Velocidad angular instantánea sin filtrar medida por el sensor IR (`GPIO27`, $P = 16$). |
-| `rpm_filt` | Float ($\text{RPM}$) | Velocidad angular filtrada (EMA suave). |
-| `rad_s` | Float ($\text{rad/s}$) | Velocidad angular en $\text{rad/s}$ ($\text{RPM} \cdot 2\pi / 60$). |
-| `pulses` | Entero | Conteo acumulado de flancos detectados por interrupción en `GPIO27`. |
+* `phase`: `PRE` (`t_ms < 0`, `motor_pwm > 0`, `u_brake = 0`) y `BRAKE` (o `STEP`, `t_ms >= 0`, `motor_pwm = 0`, `u_brake` constante).
+* En `frenado.cargarEnsayoCSV(ruta)` (1 argumento), los ensayos `step` usan `rpm_raw` por defecto (`filtrada = false`) para no enmascarar el retardo $L$ al identificar la planta.
 
-Ejemplo de salida esperada por el puerto serial:
+### 4.3 Formato CSV `runpid` (15 columnas — PID y comparativas finales)
 
-```text
-#START_CSV
-t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses
--40,PRE,190,0.00,20.0,418.5,418.2,43.79,48
--20,PRE,190,0.00,20.0,420.1,418.9,43.87,50
-0,STEP,0,0.40,65.0,417.0,418.2,43.79,52
-20,STEP,0,0.40,65.0,412.4,416.2,43.58,54
-...
-#END_CSV
+```csv
+t_ms,phase,ctrl_mode,motor_pwm,w_ref,w_meas,w_raw,error,u_brake,p_term,i_term,d_term,servo_deg,pulses,flags
 ```
 
-> **Nota de robustez para el firmware:** `caracterizacion_planta.m` detecta automáticamente el instante $t = 0$ del escalón siguiendo este orden de prioridad: (1) transición de `motor_pwm > 0` a `motor_pwm == 0`, (2) cruce de `t_ms < 0` a `t_ms >= 0`, o (3) inicio de `u_brake > 0`. Además, si `rad_s` viniera vacío o en cero, lo recalcula automáticamente desde `rpm_filt` o `rpm_raw`.
+* Distinguido automáticamente por la presencia de la columna `ctrl_mode` (`OPEN` o `PID`).
+* Todas las velocidades (`w_ref`, `w_meas`, `w_raw`) y el error (`error = w_meas - w_ref`) están en **rad/s**.
+* `flags` (máscara de bits entera sin signo):
+  * **Bit 0 (`1`):** `u = 0` saturado
+  * **Bit 1 (`2`):** `u = 1` saturado
+  * **Bit 2 (`4`):** antibloqueo simplificado activo (**E3**)
+  * **Bit 3 (`8`):** región baja de *gain scheduling* activo (**E4**)
+  * **Bit 4 (`16`):** *anti-windup* actuando
+* En `frenado.cargarEnsayoCSV(ruta)` (1 argumento), los ensayos `runpid` usan `w_meas` por defecto (`filtrada = true`) para mantener coherencia exacta con `error = w_meas - w_ref`.
 
-### 4.3 Salidas que produce MATLAB
+### 4.4 Acuerdo de referencia en lazo abierto y contratos de salida
 
-1. **Consola (`Command Window`):** tabla de parámetros identificados ($a = b/J$, $c_0 = \tau_c/J$, $K_b/J$, retardo $L$, constante de tiempo $\tau = J/b$, polo $s_p$), expresión de `Gp` (`tf`), métricas de ajuste y validación (`RMSE` y $R^2$) y verificación de $T_s = 20\text{ ms}$.
-2. **4 gráficas interactivas + archivos PNG en 300 dpi** (guardados en `proyecto_2/matlab/figuras/` con tema claro automático, listos para el informe en LaTeX/PDF):
-   * `fig1_ensayos_lazo_abierto.png` — Velocidad $\omega(t)$ y entrada $u(t)$ en *coast-down* y escalones.
-   * `fig2_respuesta_escalon_identificacion.png` — Ajuste experimental vs. `step(u0 * Gp)` y validación cruzada en un segundo escalón.
-   * `fig3_respuesta_impulso_matlab.png` — **Respuesta al impulso en MATLAB (`impulse(Gp)`)** con y sin retardo $L$.
-   * `fig4_polos_y_muestreo.png` — Mapa de polos/ceros (`pzmap`) y magnitud de Bode comparada con $f_{\text{BW}}$, Nyquist ($25\text{ Hz}$) y $f_s = 50\text{ Hz}$.
-3. **Archivo `.mat`:** `proyecto_2/matlab/modelo_planta_identificado.mat` con las variables `Gp`, `Gp_sin_retardo` y la estructura `modelo` (lista para reutilizar al diseñar el PID del Proyecto 2).
+* **Referencia justa en lazo abierto (`step` 9 cols):** cuando una corrida de lazo abierto no incluye `w_ref`, se reconstruye la rampa de su condición (`V1` o `V2`) usando la función compartida `frenado.referenciaRampa(t, w0, r_ref, w_stop)` con los parámetros de `condiciones_diseno.json` (o `datos_ejemplo/finales/condiciones_ejemplo.json`).
+* **Contrato `.mat` de planta:** `modelo_planta_identificado.mat` expone las variables `Gp`, `a`, `c0`, `Kb_J`, `L` (además de `Gp_sin_retardo` y `modelo`).
+* **Contrato `.mat`/JSON de diseño:** `diseno_pid_resultado.mat` y `condiciones_diseno.json` exponen `Kp`, `Ki`, `Kd`, `Tf`, `Ts`, `Cz`, `Tz_d`, `refV1`, `refV2`, `cmd_pid`, `cmd_ref_v1` y `cmd_ref_v2`.
 
 ---
 
@@ -117,25 +123,25 @@ t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses
 ### Paso 1 — Abrir la carpeta `proyecto_2/matlab` del repositorio
 
 1. Abre la aplicación de **MATLAB**.
-2. En la barra de ruta superior (justo debajo de la pestaña **HOME**), haz clic en el ícono **Browse for Folder** (la carpetita con una flecha verde a la izquierda de la ruta actual).
-3. Navega hasta la ubicación donde clonaste este repositorio en tu computadora, selecciona la carpeta **`proyecto_2/matlab`** y confirma:
+2. En la barra de ruta superior (debajo de **HOME**), haz clic en **Browse for Folder** (la carpetita con una flecha verde).
+3. Selecciona la carpeta **`proyecto_2/matlab`** dentro de tu copia local del repositorio:
    * **En Windows:** haz clic en **Select Folder**.
    * **En macOS:** haz clic en **Open** (en Finder).
-4. En el panel izquierdo (**Files**) deberías ver los scripts `.m`, `captura_serial.py` y las subcarpetas `datos_ejemplo/` y `figuras/`:
+4. En el panel izquierdo (**Files**) aparecerán los scripts, `+frenado/`, `datos_ejemplo/`, `figuras/` y `tests/`:
 
 ![Carpeta proyecto_2/matlab cargada en MATLAB](proyecto_2/matlab/docs/capturas/carpeta-matlab.png)
 
-> **Alternativa rápida (Windows y macOS):** también puedes usar **HOME → Open**, navegar a `proyecto_2/matlab` y abrir `caracterizacion_planta.m` directamente. Si al ejecutarlo MATLAB pregunta entre **Change Folder** y **Add to Path**, elige **Change Folder**.
+> **Alternativa rápida (Windows y macOS):** usa **HOME → Open** sobre `caracterizacion_planta.m`; si al correr MATLAB pregunta entre **Change Folder** y **Add to Path**, elige **Change Folder**.
 
 ---
 
-### Paso 2 — Abrir `caracterizacion_planta.m` y verificar el modo de ejecución
+### Paso 2 — Revisar parámetros de `caracterizacion_planta.m`
 
-1. En el panel izquierdo (**Files**), haz **doble clic** en **`caracterizacion_planta.m`** para abrirlo en el **Editor**.
-2. Revisa la sección `%% 1. CONFIGURACION PRINCIPAL` (líneas 19–46):
-   * **Para probar con los datos simulados** (sin conectar la ESP32): deja `USAR_DATOS_EJEMPLO = true;` en la línea 21.
-   * **Para analizar ensayos reales de la maqueta:** cambia la línea 21 a `USAR_DATOS_EJEMPLO = false;` (leerá automáticamente desde `proyecto_2/matlab/datos/`).
-   * Si pesaron el disco 3D ($\varnothing 130\text{ mm}$), pueden colocar su masa en kilogramos en `MASA_DISCO_KG` (línea 44) para calcular también $J_{\text{disco}} = \frac{1}{2}mR^2$.
+1. Haz **doble clic** en **`caracterizacion_planta.m`** para abrirlo en el **Editor**.
+2. En el bloque `arguments` (líneas 17–38):
+   * `PulsosPorRev` (`16` por defecto) y `MasaDiscoKg` (`NaN` si aún no se pesa; opcional) están centralizados en un solo lugar.
+   * `UsarDatosEjemplo` (`true` por defecto): usa datos sintéticos de prueba; cámbialo a `false` cuando analices tus CSV reales de `datos/`.
+   * Al correr sin `CarpetaResultados` personalizado, actualiza automáticamente `modelo_planta_identificado.mat` en la raíz de `proyecto_2/matlab/`.
 
 ![Configuración principal en el Editor de MATLAB](proyecto_2/matlab/docs/capturas/caracterizacion-planta-true.png)
 
@@ -143,10 +149,8 @@ t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses
 
 ### Paso 3 — Ejecutar el script (`Run`) y revisar los resultados en consola
 
-1. Con `caracterizacion_planta.m` abierto, haz clic en el botón verde **Run** en la pestaña **EDITOR** (barra superior):
-   * **Atajo en Windows:** `F5`.
-   * **Atajo en macOS:** `Fn + F5` (o clic directo en **Run**).
-2. En la **Command Window** (panel inferior) aparecerá el resumen de los ensayos cargados, los parámetros identificados, la función de transferencia `Gp,L(s)`, el ajuste ($R^2$, RMSE) y la verificación del periodo de muestreo $T_s = 20\text{ ms}$:
+1. Con `caracterizacion_planta.m` abierto, presiona el botón verde **Run** (en **Windows:** `F5`; en **macOS:** `Fn + F5`).
+2. En la **Command Window** se imprime el resumen de ensayos, los parámetros (`a`, `c0`, `Kb_J`, `L`), la función `Gp,L(s)`, la validación cruzada (`R^2`, `RMSE`), polos/ceros y la verificación de $T_s = 20\text{ ms}$:
 
 ![Resultados impresos en la Command Window después de presionar Run](proyecto_2/matlab/docs/capturas/logs-despues-del-run.png)
 
@@ -154,224 +158,69 @@ t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses
 
 ### Paso 4 — Revisar las 4 gráficas generadas
 
-Al mismo tiempo que imprime los resultados, MATLAB abre las **4 ventanas de gráficas** (en tema claro, listas para inspección interactiva en el video) y exporta automáticamente los PNG en alta resolución dentro de `proyecto_2/matlab/figuras/`:
+MATLAB abre las **4 ventanas de gráficas** (con tema claro automático aunque la app esté en modo oscuro) y guarda las imágenes en 300 dpi dentro de `resultados/<modo>/<timestamp>/figuras/`:
 
 ![Cuatro gráficas generadas automáticamente por MATLAB](proyecto_2/matlab/docs/capturas/graficas-generadas.png)
 
 ---
 
-## 6. Cómo capturar los ensayos reales desde la ESP32 (Windows y macOS)
+### Paso 5 — Diseñar el PID inicial en MATLAB (`diseno_pid.m`)
 
-Cuando la maqueta física y el firmware `.ino` estén listos, conecta la ESP32 por USB y sigue estos 3 pasos desde la **Command Window** de MATLAB (ubicado en `proyecto_2/matlab`):
+Una vez actualizado `modelo_planta_identificado.mat`, abre `diseno_pid.m` y presiona **Run** (o ejecuta en la Command Window):
 
-1. **Identificar el puerto serial de la ESP32:**
-   ```matlab
-   serialportlist("available")
-   ```
-   * **En Windows** verás algo como `"COM5"` (o `"COM3"`, `"COM4"`, etc.).
-   * **En macOS** verás algo como `"/dev/cu.usbserial-0001"` o `"/dev/cu.SLAB_USBtoUART"` *(usa siempre el que empieza con `/dev/cu.`, no `/dev/tty.`)*.
+```matlab
+diseno_pid()
+```
 
-2. **Capturar el ensayo *coast-down* y al menos dos escalones de frenado** (reemplaza `PUERTO` por el tuyo):
-   ```matlab
-   % Ejemplo en Windows: PUERTO = "COM5"
-   % Ejemplo en macOS:   PUERTO = "/dev/cu.usbserial-0001"
-   PUERTO = "COM5";
-
-   captura_serial_esp32(PUERTO, "step 180 0.0 3000 400 6000", "coastdown_1.csv")
-   captura_serial_esp32(PUERTO, "step 180 0.4 3000 400 6000", "step_u04_1.csv")
-   captura_serial_esp32(PUERTO, "step 180 0.7 3000 400 6000", "step_u07_1.csv")
-   ```
-   Los archivos se guardarán automáticamente en `proyecto_2/matlab/datos/`.  
-   *(Si prefieres capturar desde la terminal con Python: `python captura_serial.py --port COM5 --cmd "step 180 0.4 3000 400 6000" --out step_u04_1.csv`; en macOS usa `python3` y `--port /dev/cu....`).*
-
-3. **Ejecutar la caracterización con los datos reales:**
-   * Abre `caracterizacion_planta.m`, cambia la línea 21 a `USAR_DATOS_EJEMPLO = false;` y presiona **Run**.
-   * Obtendrás las gráficas reales en `proyecto_2/matlab/figuras/` y el modelo actualizado en `modelo_planta_identificado.mat`.
-
-Repositorio grupal para **CE 1110 — Análisis de Señales Mixtas** (Instituto Tecnológico de Costa Rica).  
-**Sistema:** Banco didáctico de frenado de disco con **ESP32 clásica**, actuador de freno por servomotor **MG996**, sensor óptico **IR AD33838** y caracterización/control digital en **MATLAB** (Tarea 2 y Proyecto Grupal 2).
-
----
-
-## 1. Estructura del repositorio
+Esto genera las 3 gráficas de diseño (polos/ceros en $Z$, región realizable de rampas y simulación no lineal con saturación + *anti-windup*), guarda `diseno_pid_resultado.mat` + `condiciones_diseno.json` e imprime las líneas exactas para copiar al Monitor Serial de la ESP32:
 
 ```text
-proyecto_2/
-└── matlab/
-    ├── caracterizacion_planta.m      # Script principal: identifica Gp,L(s), grafica escalon e impulse()
-    ├── captura_serial_esp32.m        # Captura directa ESP32 -> CSV desde MATLAB (serialport)
-    ├── captura_serial.py             # Alternativa ligera en Python (pyserial)
-    ├── generar_datos_ejemplo.m       # Genera CSV sinteticos con el formato exacto de la ESP32
-    ├── datos/                        # (Se crea al capturar) CSV reales de la maqueta
-    ├── datos_ejemplo/                # CSV sinteticos para probar el pipeline sin hardware
-    ├── figuras/                      # Graficas exportadas automaticamente en 300 dpi
-    ├── docs/capturas/                # Capturas de esta guia
-    └── modelo_planta_identificado.mat# Modelo identificado (Gp, Gp_sin_retardo, metricas)
+pid <Kp> <Ki> <Kd> <Tf>
+ref <r_ref_v1> <w_stop>
+ref <r_ref_v2> <w_stop>
 ```
 
 ---
 
-## 2. Resumen del hardware y pines (ESP32 clásica)
+## 6. Flujo con hardware real y pruebas automatizadas (Windows y macOS)
 
-| Subsistema | Componente | Pin ESP32 | Detalle clave |
-| :--- | :--- | :--- | :--- |
-| **Motor DC + Driver** | JGB37-520 ($12\text{ V}$, $600\text{ RPM}$) + XY-MOS + 1N4006 | `GPIO25` | PWM de potencia ($12\text{ V}/2\text{ A}$ externa) |
-| **Freno (actuador)** | Servomotor MG996 ($180^\circ$, engranajes metálicos) | `GPIO26` | Alimentado por portapilas 4xAA ($6\text{ V}$) |
-| **Sensor de velocidad** | Sensor óptico reflectivo IR `AD33838` (LM393) | `GPIO27` | Alimentado a `3V3`; disco $\varnothing 130\text{ mm}$ ($R = 0.065\text{ m}$) con **16 bloques negros y 16 blancos** ($P = 16$ pulsos/rev) |
-| **Botones (opcionales)** | Inicio / Parada de emergencia | `GPIO32` / `GPIO33` | `INPUT_PULLUP` |
-| **Referencia** | Tierra común (`GND`) | `GND` | Unir tierras de ESP32, XY-MOS ($12\text{ V}$), MG996 ($6\text{ V}$) y sensor IR |
+### 6.1 Identificación semiautomática en vivo (1 comando — E1)
 
----
+Con la ESP32 conectada por USB, ubica su puerto con `serialportlist("available")` (ej. `"COM5"` en Windows o `"/dev/cu.usbserial-0001"` en macOS, usando siempre `/dev/cu.*`) y corre:
 
-## 3. Cómo funciona el módulo de MATLAB
-
-El flujo está separado en **captura** y **análisis**, de modo que el equipo puede probar todo con datos sintéticos mientras se termina el firmware `.ino` y el montaje físico:
-
-| Archivo | Propósito |
-| :--- | :--- |
-| `captura_serial_esp32.m` | Abre el puerto serial de la ESP32 a `115200` baudios, envía el comando `step ...`, escucha entre `#START_CSV` y `#END_CSV`, guarda el `.csv` en `proyecto_2/matlab/datos/` y envía parada segura (`x`) si se interrumpe con `Ctrl+C`. |
-| `captura_serial.py` | Misma captura serial usando Python (`pip install pyserial`), por si se prefiere capturar desde terminal. |
-| `generar_datos_ejemplo.m` | Simula la dinámica física del disco ($J\dot{\omega} + b\omega + \tau_c + \tau_b(u(t-L)) = 0$) y crea 3 CSV de prueba (`coastdown_1.csv`, `step_u04_1.csv`, `step_u07_1.csv`) con el formato exacto de la ESP32. |
-| `caracterizacion_planta.m` | Carga los 3 ensayos (*coast-down*, escalón de identificación y escalón de validación), estima $a = b/J$, $c_0 = \tau_c/J$, $K_b/J$ y el retardo del servo $L$, construye la función de transferencia local $G_{p,L}(s) = \frac{-K_b e^{-Ls}}{Js + b}$, valida contra datos no usados en el ajuste (`step`), genera la **respuesta al impulso en MATLAB (`impulse`)** y verifica polos/Bode frente a $T_s = 20\text{ ms}$. |
-
----
-
-## 4. Contrato de Entradas y Salidas (para acoplar el firmware `.ino`)
-
-Esta sección define el **acuerdo exacto entre el firmware de la ESP32 y MATLAB** para que ambos módulos encajen a la primera sin cambios manuales.
-
-### 4.1 Entradas que espera MATLAB desde la ESP32 (puerto serial)
-
-* **Velocidad serial:** `115200` baudios, fin de línea `LF` (`\n`, es decir, `Serial.println(...)`).
-* **Comandos que puede enviar `captura_serial_esp32.m` a la ESP32:**
-  * `step <pwm_ini> <u_freno> <spinup_ms> <pre_ms> <dur_ms>` — ejecuta un ensayo de *coast-down* (`u_freno = 0.0`) o de escalón de frenado (`u_freno > 0.0`).
-  * `x` — parada de emergencia inmediata (`motor_pwm = 0`, freno liberado `u_brake = 0`).
-* **Marcadores obligatorios de inicio y fin de archivo:**
-  * Antes del encabezado CSV, la ESP32 debe imprimir exactamente: `#START_CSV`
-  * Al terminar el ensayo, debe imprimir exactamente: `#END_CSV`
-  * Cualquier otro texto fuera de esos marcadores se muestra en consola como log (`[ESP32] ...`) y no ensucia el `.csv`.
-
-### 4.2 Formato exacto del archivo CSV (entrada de `caracterizacion_planta.m`)
-
-Encabezado obligatorio en la primera línea después de `#START_CSV`:
-
-```csv
-t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses
+```matlab
+resumen = identificacion_semiautomatica("COM5", PwmIni=190, UIdent=0.40, UVal=0.70, PulsosPorRev=16);
 ```
 
-| Columna | Tipo / Unidad | Descripción |
-| :--- | :--- | :--- |
-| `t_ms` | Entero ($\text{ms}$) | Marca de tiempo cada $T_s = 20\text{ ms}$. Idealmente $< 0$ en fase `PRE` y $\ge 0$ a partir del escalón (`STEP`). |
-| `phase` | Texto | Etapa del ensayo (ej. `PRE` antes del corte y `STEP` a partir del corte/frenado). |
-| `motor_pwm` | Entero (`0..255`) | Ciclo de trabajo aplicado al módulo XY-MOS (`GPIO25`). Debe caer a `0` exactamente al iniciar el escalón. |
-| `u_brake` | Float (`0.0..1.0`) | Acción normalizada de freno (`0.0` en *coast-down* / freno liberado; valor fijo $u_0 \in (0, 1]$ en el escalón). |
-| `servo_deg` | Float ($^\circ$) | Ángulo ordenado al servomotor MG996 (`GPIO26`). |
-| `rpm_raw` | Float ($\text{RPM}$) | Velocidad angular instantánea sin filtrar medida por el sensor IR (`GPIO27`, $P = 16$). |
-| `rpm_filt` | Float ($\text{RPM}$) | Velocidad angular filtrada (EMA suave). |
-| `rad_s` | Float ($\text{rad/s}$) | Velocidad angular en $\text{rad/s}$ ($\text{RPM} \cdot 2\pi / 60$). |
-| `pulses` | Entero | Conteo acumulado de flancos detectados por interrupción en `GPIO27`. |
+Este comando dispara secuencialmente *coast-down* + dos escalones, valida $R^2$ sobre el segundo escalón, calcula las ganancias PID sugeridas y guarda todo en `datos/sesion_id_<timestamp>/` y `resultados/`. Para probar el flujo completo sin hardware conectado:
 
-Ejemplo de salida esperada por el puerto serial:
-
-```text
-#START_CSV
-t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses
--40,PRE,190,0.00,20.0,418.5,418.2,43.79,48
--20,PRE,190,0.00,20.0,420.1,418.9,43.87,50
-0,STEP,0,0.40,65.0,417.0,418.2,43.79,52
-20,STEP,0,0.40,65.0,412.4,416.2,43.58,54
-...
-#END_CSV
+```matlab
+resumen = identificacion_semiautomatica("", ModoEjemplo=true);
 ```
 
-> **Nota de robustez para el firmware:** `caracterizacion_planta.m` detecta automáticamente el instante $t = 0$ del escalón siguiendo este orden de prioridad: (1) transición de `motor_pwm > 0` a `motor_pwm == 0`, (2) cruce de `t_ms < 0` a `t_ms >= 0`, o (3) inicio de `u_brake > 0`. Además, si `rad_s` viniera vacío o en cero, lo recalcula automáticamente desde `rpm_filt` o `rpm_raw`.
+### 6.2 Captura individual de ensayos (`step` o `runpid`)
 
-### 4.3 Salidas que produce MATLAB
+```matlab
+PUERTO = "COM5"; % En macOS: "/dev/cu.usbserial-0001"
 
-1. **Consola (`Command Window`):** tabla de parámetros identificados ($a = b/J$, $c_0 = \tau_c/J$, $K_b/J$, retardo $L$, constante de tiempo $\tau = J/b$, polo $s_p$), expresión de `Gp` (`tf`), métricas de ajuste y validación (`RMSE` y $R^2$) y verificación de $T_s = 20\text{ ms}$.
-2. **4 gráficas interactivas + archivos PNG en 300 dpi** (guardados en `proyecto_2/matlab/figuras/` con tema claro automático, listos para el informe en LaTeX/PDF):
-   * `fig1_ensayos_lazo_abierto.png` — Velocidad $\omega(t)$ y entrada $u(t)$ en *coast-down* y escalones.
-   * `fig2_respuesta_escalon_identificacion.png` — Ajuste experimental vs. `step(u0 * Gp)` y validación cruzada en un segundo escalón.
-   * `fig3_respuesta_impulso_matlab.png` — **Respuesta al impulso en MATLAB (`impulse(Gp)`)** con y sin retardo $L$.
-   * `fig4_polos_y_muestreo.png` — Mapa de polos/ceros (`pzmap`) y magnitud de Bode comparada con $f_{\text{BW}}$, Nyquist ($25\text{ Hz}$) y $f_s = 50\text{ Hz}$.
-3. **Archivo `.mat`:** `proyecto_2/matlab/modelo_planta_identificado.mat` con las variables `Gp`, `Gp_sin_retardo` y la estructura `modelo` (lista para reutilizar al diseñar el PID del Proyecto 2).
+captura_serial_esp32(PUERTO, "step 190 0.0 3000 400 6000", "coastdown_1.csv")
+captura_serial_esp32(PUERTO, "step 190 0.4 3000 400 6000", "step_u04_1.csv")
+captura_serial_esp32(PUERTO, "runpid 190 3000 400 6000", "v1_pid_rep1.csv")
+```
 
----
+Alternativa desde terminal con Python (`python3` en macOS):
 
-## 5. Guía paso a paso: cómo ejecutarlo en la app de MATLAB (Windows y macOS)
+```bash
+python captura_serial.py --port COM5 --cmd "runpid 190 3000 400 6000" --out v1_pid_rep1.csv
+```
 
-> **Requisitos:** MATLAB (R2023b o superior, probado en R2026b) con **Control System Toolbox** (incluido en la licencia estudiantil del TEC y en el LAIMI).
+### 6.3 Suite de pruebas automatizadas (sin hardware)
 
-### Paso 1 — Abrir la carpeta `proyecto_2/matlab` del repositorio
-
-1. Abre la aplicación de **MATLAB**.
-2. En la barra de ruta superior (justo debajo de la pestaña **HOME**), haz clic en el ícono **Browse for Folder** (la carpetita con una flecha verde a la izquierda de la ruta actual).
-3. Navega hasta la ubicación donde clonaste este repositorio en tu computadora, selecciona la carpeta **`proyecto_2/matlab`** y confirma:
-   * **En Windows:** haz clic en **Select Folder**.
-   * **En macOS:** haz clic en **Open** (en Finder).
-4. En el panel izquierdo (**Files**) deberías ver los scripts `.m`, `captura_serial.py` y las subcarpetas `datos_ejemplo/` y `figuras/`:
-
-![Carpeta proyecto_2/matlab cargada en MATLAB](proyecto_2/matlab/docs/capturas/carpeta-matlab.png)
-
-> **Alternativa rápida (Windows y macOS):** también puedes usar **HOME → Open**, navegar a `proyecto_2/matlab` y abrir `caracterizacion_planta.m` directamente. Si al ejecutarlo MATLAB pregunta entre **Change Folder** y **Add to Path**, elige **Change Folder**.
-
----
-
-### Paso 2 — Abrir `caracterizacion_planta.m` y verificar el modo de ejecución
-
-1. En el panel izquierdo (**Files**), haz **doble clic** en **`caracterizacion_planta.m`** para abrirlo en el **Editor**.
-2. Revisa la sección `%% 1. CONFIGURACION PRINCIPAL` (líneas 19–46):
-   * **Para probar con los datos simulados** (sin conectar la ESP32): deja `USAR_DATOS_EJEMPLO = true;` en la línea 21.
-   * **Para analizar ensayos reales de la maqueta:** cambia la línea 21 a `USAR_DATOS_EJEMPLO = false;` (leerá automáticamente desde `proyecto_2/matlab/datos/`).
-   * Si pesaron el disco 3D ($\varnothing 130\text{ mm}$), pueden colocar su masa en kilogramos en `MASA_DISCO_KG` (línea 44) para calcular también $J_{\text{disco}} = \frac{1}{2}mR^2$.
-
-![Configuración principal en el Editor de MATLAB](proyecto_2/matlab/docs/capturas/caracterizacion-planta-true.png)
-
----
-
-### Paso 3 — Ejecutar el script (`Run`) y revisar los resultados en consola
-
-1. Con `caracterizacion_planta.m` abierto, haz clic en el botón verde **Run** en la pestaña **EDITOR** (barra superior):
-   * **Atajo en Windows:** `F5`.
-   * **Atajo en macOS:** `Fn + F5` (o clic directo en **Run**).
-2. En la **Command Window** (panel inferior) aparecerá el resumen de los ensayos cargados, los parámetros identificados, la función de transferencia `Gp,L(s)`, el ajuste ($R^2$, RMSE) y la verificación del periodo de muestreo $T_s = 20\text{ ms}$:
-
-![Resultados impresos en la Command Window después de presionar Run](proyecto_2/matlab/docs/capturas/logs-despues-del-run.png)
-
----
-
-### Paso 4 — Revisar las 4 gráficas generadas
-
-Al mismo tiempo que imprime los resultados, MATLAB abre las **4 ventanas de gráficas** (en tema claro, listas para inspección interactiva en el video) y exporta automáticamente los PNG en alta resolución dentro de `proyecto_2/matlab/figuras/`:
-
-![Cuatro gráficas generadas automáticamente por MATLAB](proyecto_2/matlab/docs/capturas/graficas-generadas.png)
-
----
-
-## 6. Cómo capturar los ensayos reales desde la ESP32 (Windows y macOS)
-
-Cuando la maqueta física y el firmware `.ino` estén listos, conecta la ESP32 por USB y sigue estos 3 pasos desde la **Command Window** de MATLAB (ubicado en `proyecto_2/matlab`):
-
-1. **Identificar el puerto serial de la ESP32:**
-   ```matlab
-   serialportlist("available")
-   ```
-   * **En Windows** verás algo como `"COM5"` (o `"COM3"`, `"COM4"`, etc.).
-   * **En macOS** verás algo como `"/dev/cu.usbserial-0001"` o `"/dev/cu.SLAB_USBtoUART"` *(usa siempre el que empieza con `/dev/cu.`, no `/dev/tty.`)*.
-
-2. **Capturar el ensayo *coast-down* y al menos dos escalones de frenado** (reemplaza `PUERTO` por el tuyo):
-   ```matlab
-   % Ejemplo en Windows: PUERTO = "COM5"
-   % Ejemplo en macOS:   PUERTO = "/dev/cu.usbserial-0001"
-   PUERTO = "COM5";
-
-   captura_serial_esp32(PUERTO, "step 180 0.0 3000 400 6000", "coastdown_1.csv")
-   captura_serial_esp32(PUERTO, "step 180 0.4 3000 400 6000", "step_u04_1.csv")
-   captura_serial_esp32(PUERTO, "step 180 0.7 3000 400 6000", "step_u07_1.csv")
-   ```
-   Los archivos se guardarán automáticamente en `proyecto_2/matlab/datos/`.  
-   *(Si prefieres capturar desde la terminal con Python: `python captura_serial.py --port COM5 --cmd "step 180 0.4 3000 400 6000" --out step_u04_1.csv`; en macOS usa `python3` y `--port /dev/cu....`).*
-
-3. **Ejecutar la caracterización con los datos reales:**
-   * Abre `caracterizacion_planta.m`, cambia la línea 21 a `USAR_DATOS_EJEMPLO = false;` y presiona **Run**.
-   * Obtendrás las gráficas reales en `proyecto_2/matlab/figuras/` y el modelo actualizado en `modelo_planta_identificado.mat`.
+* **En MATLAB** (desde `proyecto_2/matlab`):
+  ```matlab
+  results = runtests("tests/test_frenado.m"); assertSuccess(results)
+  ```
+* **En Python** (desde `proyecto_2/matlab`):
+  ```bash
+  python -B -m unittest discover -s tests -p "test_*.py" -v
+  ```
