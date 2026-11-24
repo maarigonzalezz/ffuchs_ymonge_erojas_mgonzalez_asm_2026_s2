@@ -37,12 +37,17 @@ const uint32_t MAX_STAGE_MS = 600000;  // limita conversiones y diferencias de t
 const uint32_t BUTTON_DEBOUNCE_MS = 40;
 
 // ---------- Sensor de velocidad ----------
-const uint32_t PULSES_PER_REV   = 32;        // pulsos efectivos por vuelta configurados
+const uint32_t PULSES_PER_REV_DEFAULT = 32;  // pulsos efectivos por vuelta (cambiar en caliente: cfg p <n>)
 #define        IR_EDGE            FALLING    // contar UN solo tipo de flanco: RISING o FALLING
-const uint32_t MIN_PULSE_US     = 2000UL;    // anti-rebote (a 600 RPM, P=32 -> 3125 us)
+const uint32_t MIN_PULSE_DEFAULT_US = 2000UL; // anti-rebote (cfg mp <us>); a 600 RPM, P=32 -> 3125 us
 const uint32_t PULSE_TIMEOUT_US = 250000UL;  // sin pulsos por este tiempo -> 0 RPM
 const float    RPM_EMA_ALPHA    = 0.35f;     // filtro EMA (0..1, mayor = menos filtrado)
-const uint32_t SPEED_WINDOW_US  = 100000UL;  // ventana del estimador: pulsos de los ultimos 100 ms
+const uint32_t SPEED_WINDOW_DEFAULT_US = 100000UL; // ventana del estimador (cfg win <ms>)
+
+// Configuracion del sensor modificable por Serial (comando cfg), sin reprogramar la placa.
+uint32_t pulsesPerRev = PULSES_PER_REV_DEFAULT;
+volatile uint32_t minPulseUs = MIN_PULSE_DEFAULT_US;   // la lee la ISR
+uint32_t speedWindowUs = SPEED_WINDOW_DEFAULT_US;
 
 // ---------- Motor ----------
 const uint32_t MOTOR_PWM_FREQ = 20000;
@@ -85,6 +90,8 @@ struct Trial {
   uint32_t phaseStartUs = 0, referenceUs = 0, stoppedSinceUs = 0;
   bool csvOpen = false, speedSeen = false, stopPending = false;
   bool commandRejected = false;
+  bool usePid = false;          // runpid: la fase BRAKE la gobierna el PID
+  float wRef0 = 0, wRef = 0;    // referencia inicial y actual [rad/s]
 };
 Trial trial;
 bool manualStartPending = false;
@@ -172,7 +179,7 @@ void IRAM_ATTR isrPulse() {
   portENTER_CRITICAL_ISR(&isrMux);
   uint32_t last = isrLastUs;
   uint32_t dt = now - last;
-  if (isrHasPulse && dt < MIN_PULSE_US) {          // rebote / ruido
+  if (isrHasPulse && dt < minPulseUs) {          // rebote / ruido
     portEXIT_CRITICAL_ISR(&isrMux);
     return;
   }
@@ -303,7 +310,7 @@ void actualizarVelocidad() {
   if (hasPulse) {
     for (uint32_t i = 0; i < avail; i++) {
       uint32_t t = ring[(head - 1 - i) & (PULSE_RING_SIZE - 1)];
-      if (now - t > SPEED_WINDOW_US) break;
+      if (now - t > speedWindowUs) break;
       if (k == 0) tLast = t;
       tFirst = t;
       k++;
@@ -321,12 +328,12 @@ void actualizarVelocidad() {
     // se baja la estimacion (continuo, no actua con el jitter normal de los pulsos).
     float cota = 0.67f * (float)since;
     if (cota > meanDt) meanDt = cota;
-    rpmRaw = 60.0e6f / ((float)PULSES_PER_REV * meanDt);
+    rpmRaw = 60.0e6f / ((float)pulsesPerRev * meanDt);
   } else if (dt != 0) {
     // Velocidad muy baja: menos de 2 pulsos en la ventana, se usa el ultimo intervalo.
     uint32_t dtEff = dt;
     if (since > dtEff) dtEff = since;
-    rpmRaw = 60.0e6f / ((float)PULSES_PER_REV * (float)dtEff);
+    rpmRaw = 60.0e6f / ((float)pulsesPerRev * (float)dtEff);
   } else {
     rpmRaw = 0;
   }
@@ -353,6 +360,88 @@ void resetPulsos() {
   portEXIT_CRITICAL(&isrMux);
   rpmRaw = rpmFilt = radS = 0;
 }
+
+// ---------- PID discreto (todo en rad/s, Ts = TS_US) ----------
+// e[k] = w[k] - wref[k]: error positivo = va mas rapido que la referencia = pide mas freno (u mayor).
+// Ganancias en memoria; se actualizaran por Serial (comando pid). Con todo en 0 el freno queda liberado.
+struct PidGains {
+  float kp;   // [1/(rad/s)]
+  float ki;   // [1/(rad)]
+  float kd;   // [s/(rad/s)]
+  float tf;   // constante del filtro derivativo [s], >= 0
+};
+PidGains pidGains = {0.0f, 0.0f, 0.0f, 0.05f};
+
+struct PidState {
+  bool  primerCiclo;  // true: sin historial, la derivada arranca en 0
+  float wPrev;        // velocidad filtrada del ciclo anterior [rad/s]
+  float i;            // integrador (ya multiplicado por Ki)
+  float d;            // derivada filtrada
+  float e, p, u;      // ultimo error, termino P y salida (para CSV)
+  bool  clamp;        // true: el anti-windup congelo el integrador en este ciclo
+};
+PidState pid = {true, 0, 0, 0, 0, 0, 0, false};
+
+void pidReset() {
+  pid.primerCiclo = true;
+  pid.wPrev = pid.i = pid.d = pid.e = pid.p = pid.u = 0;
+  pid.clamp = false;
+}
+
+// Un paso del PID. Devuelve u en [0,1] (0 = freno liberado, 1 = freno maximo).
+float pidPaso(float wRef, float wMeas) {
+  const float ts = (float)TS_US * 1.0e-6f;
+  if (!isfinite(wRef) || !isfinite(wMeas)) {   // lectura invalida: no acumular, soltar freno
+    pid.u = 0;
+    return 0;
+  }
+  float e = wMeas - wRef;
+  float p = pidGains.kp * e;
+
+  // Derivada sobre la medicion (sin golpe por cambios de referencia), filtrada con Tf.
+  if (pid.primerCiclo) {
+    pid.d = 0;
+    pid.wPrev = wMeas;
+    pid.primerCiclo = false;
+  } else {
+    float tf = pidGains.tf < 0 ? 0 : pidGains.tf;
+    pid.d = (tf / (tf + ts)) * pid.d + (pidGains.kd / (tf + ts)) * (wMeas - pid.wPrev);
+    pid.wPrev = wMeas;
+  }
+
+  // Integrador Euler hacia atras con anti-windup por recorte condicional.
+  float iCand = pid.i + pidGains.ki * ts * e;
+  float uCand = p + iCand + pid.d;
+  bool satAlta = (uCand > 1.0f && e > 0);
+  bool satBaja = (uCand < 0.0f && e < 0);
+  pid.clamp = satAlta || satBaja;
+  if (!pid.clamp) pid.i = iCand;
+
+  float u = p + pid.i + pid.d;
+  if (u < 0.0f) u = 0.0f;
+  if (u > 1.0f) u = 1.0f;
+  pid.e = e;
+  pid.p = p;
+  pid.u = u;
+  return u;
+}
+
+// Rampa de referencia decreciente: wref(t) = max(w_stop, w0 - rate * t). Se configura con el comando ref.
+// Para ser realizable: |decel. de coast-down| < rate < |decel. con u=1| (ver diseno_pid.m).
+float refRate  = 50.0f;   // [rad/s^2]
+float refWStop = 5.0f;    // [rad/s] velocidad final de la rampa y fin del ensayo
+
+// Mascara de bits de la columna flags del CSV de runpid.
+const uint8_t FLAG_U_MIN    = 1;    // u = 0 (freno liberado por saturacion baja)
+const uint8_t FLAG_U_MAX    = 2;    // u = 1 (saturacion alta)
+const uint8_t FLAG_ABS      = 4;    // antibloqueo activo (extra)
+const uint8_t FLAG_GS       = 8;    // region de gain scheduling (extra)
+const uint8_t FLAG_ANTIWIND = 16;   // anti-windup congelo el integrador
+uint8_t pidFlags = 0;
+
+// Banderas de los extras opcionales (los implementan quienes hagan E3/E4 en los ganchos de ejecutarPid).
+bool extraAbsOn = false;   // E3: antibloqueo (ABS)
+bool extraGsOn  = false;   // E4: gain scheduling
 
 // El motor solo arranca tras dar tiempo al servo para liberar la zapata.
 void iniciarManual(int pwm) {
@@ -381,11 +470,48 @@ void iniciarEnsayo(int pwm, float brake, uint32_t spinup, uint32_t pre, uint32_t
   serialPrintln("#OK ensayo: liberando freno; x cancela en cualquier fase");
 }
 
+// runpid: igual que step, pero al terminar PRE corta el motor y frena con el PID siguiendo la rampa.
+void iniciarEnsayoPid(int pwm, uint32_t spinup, uint32_t pre, uint32_t duration) {
+  iniciarEnsayo(pwm, 0.0f, spinup, pre, duration);
+  trial.usePid = true;
+  pidReset();
+  pidFlags = 0;
+}
+
+// Un ciclo del lazo cerrado (fase BRAKE de runpid): rampa de referencia, PID y freno.
+void ejecutarPid(uint32_t now) {
+  float t = (float)(now - trial.phaseStartUs) * 1.0e-6f;
+  float wRef = trial.wRef0 - refRate * t;
+  if (wRef < refWStop) wRef = refWStop;
+  trial.wRef = wRef;
+  pidFlags = 0;
+  // HOOK_GS: (extra E4, gain scheduling) si extraGsOn, elegir aqui pidGains segun radS y marcar
+  //          pidFlags |= FLAG_GS en la region activa. Va ANTES de pidPaso().
+  float u = pidPaso(wRef, radS);
+  // HOOK_ABS: (extra E3, antibloqueo) si extraAbsOn, modificar aqui u y marcar
+  //           pidFlags |= FLAG_ABS mientras actue. Va DESPUES de pidPaso() y ANTES de aplicarFreno().
+  aplicarFreno(u);                       // u > 0 mantiene el motor apagado; u = 0 libera la zapata
+  if (uBrake <= 0.0f) pidFlags |= FLAG_U_MIN;
+  if (uBrake >= 1.0f) pidFlags |= FLAG_U_MAX;
+  if (pid.clamp) pidFlags |= FLAG_ANTIWIND;
+}
+
 void registrarMuestra(uint32_t now) {
   // Origen fijo: instante programado del escalon. La primera fila BRAKE
   // indica el corte real, incluido cualquier retraso; no se reinicia el reloj
   // al cambiar de fase porque alteraria los intervalos ya enviados en PRE.
   int32_t relativeUs = (int32_t)(now - trial.referenceUs);
+  if (trial.usePid) {
+    // CSV de lazo cerrado. En PRE (lazo abierto) w_ref, error y terminos PID van en 0.
+    bool closed = trial.phase == TRIAL_BRAKE;
+    serialPrintf("%.3f,%s,%s,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%lu,%u\n",
+                  relativeUs / 1000.0, closed ? "BRAKE" : "PRE", closed ? "PID" : "OPEN", motorPwm,
+                  closed ? trial.wRef : 0.0f, radS, rpmRaw * (2.0f * PI / 60.0f),
+                  closed ? pid.e : 0.0f, uBrake, closed ? pid.p : 0.0f,
+                  closed ? pid.i : 0.0f, closed ? pid.d : 0.0f, servoDeg,
+                  (unsigned long)leerPulsos(), closed ? (unsigned)pidFlags : 0u);
+    return;
+  }
   serialPrintf("%.3f,%s,%d,%.4f,%.2f,%.3f,%.3f,%.4f,%lu\n",
                 relativeUs / 1000.0, trial.phase == TRIAL_PRE ? "PRE" : "BRAKE",
                 motorPwm, uBrake, servoDeg, rpmRaw, rpmFilt, radS,
@@ -410,7 +536,10 @@ void actualizarEnsayo(uint32_t now) {
       trial.referenceUs = now + trial.preMs * 1000UL;
       trial.csvOpen = true;
       const char header[] = "#START_CSV\nt_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses\n";
-      if (!encolarSerial(header, sizeof(header) - 1, false)) {
+      const char headerPid[] = "#START_CSV\nt_ms,phase,ctrl_mode,motor_pwm,w_ref,w_meas,w_raw,error,u_brake,p_term,i_term,d_term,servo_deg,pulses,flags\n";
+      bool okHeader = trial.usePid ? encolarSerial(headerPid, sizeof(headerPid) - 1, false)
+                                   : encolarSerial(header, sizeof(header) - 1, false);
+      if (!okHeader) {
         trial.csvOpen = false;
         finalizarOperacion("error_buffer_serial: no se inicio captura");
         return;
@@ -426,12 +555,30 @@ void actualizarEnsayo(uint32_t now) {
 
   if (trial.phase == TRIAL_PRE && now - trial.phaseStartUs >= trial.preMs * 1000UL) {
     setMotorPWM(0); // tambien en coast-down: aplicarFreno(0) solo libera
-    aplicarFreno(trial.brake);
+    if (trial.usePid) {
+      if (radS <= refWStop) {
+        finalizarOperacion("error_sin_velocidad_inicial: w <= w_stop, no se inicia el PID");
+        return;
+      }
+      pidReset();
+      trial.wRef0 = radS;   // wref(0) = wf(0): sin salto inicial
+      trial.wRef = radS;
+      pidFlags = 0;
+    } else {
+      aplicarFreno(trial.brake);
+    }
     trial.phase = TRIAL_BRAKE;
     trial.phaseStartUs = now;
   }
+  if (trial.usePid && trial.phase == TRIAL_BRAKE) ejecutarPid(now);
   registrarMuestra(now);
   if (trial.phase != TRIAL_BRAKE) return;
+
+  // Fin de la rampa: la velocidad filtrada llego a w_stop (solo lazo cerrado).
+  if (trial.usePid && radS <= refWStop) {
+    finalizarOperacion("w_final_alcanzada");
+    return;
+  }
 
   // Sin una medicion valida previa no se confunde ausencia de sensor con parada.
   if (trial.speedSeen && rpmRaw == 0) {
@@ -469,7 +616,7 @@ void tickMuestreo() {
   if (mode == MODE_PULSE_CHECK && tickCount % 10 == 0) {   // cada 200 ms
     uint32_t n = leerPulsos();
     serialPrintf("#P pulsos=%lu vueltas=%.2f rpm=%.1f\n",
-                  (unsigned long)n, (float)n / (float)PULSES_PER_REV, rpmFilt);
+                  (unsigned long)n, (float)n / (float)pulsesPerRev, rpmFilt);
   }
 
   if (mode == MODE_MANUAL && tickCount % 5 == 0) {          // telemetria cada 100 ms
@@ -508,6 +655,21 @@ void leerBotones() {
 #endif
 }
 
+// ---------- Info (parametros activos) ----------
+void imprimirInfo() {
+  serialPrintf("Pines: motor=GPIO%d servo=GPIO%d IR=GPIO%d inicio=GPIO%d parada=GPIO%d\n",
+                PIN_MOTOR_PWM, PIN_SERVO, PIN_IR, PIN_BTN_START, PIN_BTN_STOP);
+  serialPrintf("Servo: RELEASE=%.1f CONTACT=%.1f MAX_SAFE=%.1f deg | Ts=%lu ms\n",
+                SERVO_RELEASE_DEG, SERVO_CONTACT_DEG, SERVO_MAX_SAFE_DEG, (unsigned long)(TS_US / 1000UL));
+  serialPrintf("Sensor: P=%lu pulsos/rev, min_pulso=%lu us, ventana=%lu ms, flanco=%s\n",
+                (unsigned long)pulsesPerRev, (unsigned long)minPulseUs,
+                (unsigned long)(speedWindowUs / 1000UL), (IR_EDGE == RISING) ? "RISING" : "FALLING");
+  serialPrintf("PID: kp=%.4f ki=%.4f kd=%.4f tf=%.3f s\n",
+                pidGains.kp, pidGains.ki, pidGains.kd, pidGains.tf);
+  serialPrintf("Ref: rate=%.2f rad/s^2, w_stop=%.2f rad/s\n", refRate, refWStop);
+  serialPrintf("Extras: ABS=%s GS=%s\n", extraAbsOn ? "on" : "off", extraGsOn ? "on" : "off");
+}
+
 // ---------- Ayuda ----------
 void imprimirAyuda() {
   serialPrintln("=== planta_lazo_abierto (ESP32) ===");
@@ -516,12 +678,19 @@ void imprimirAyuda() {
   serialPrintf("Ts=%lu ms | servo RELEASE=%.1f CONTACT=%.1f MAX_SAFE=%.1f deg\n",
                 (unsigned long)(TS_US / 1000UL),
                 SERVO_RELEASE_DEG, SERVO_CONTACT_DEG, SERVO_MAX_SAFE_DEG);
-  serialPrintf("Sensor: P=%lu pulsos/rev, flanco=%s\n", (unsigned long)PULSES_PER_REV,
-                (IR_EDGE == RISING) ? "RISING" : "FALLING");
+  serialPrintf("Sensor: P=%lu pulsos/rev, flanco=%s, min_pulso=%lu us, ventana=%lu ms\n",
+                (unsigned long)pulsesPerRev, (IR_EDGE == RISING) ? "RISING" : "FALLING",
+                (unsigned long)minPulseUs, (unsigned long)(speedWindowUs / 1000UL));
   serialPrintln("Comandos:");
   serialPrintln("  h            ayuda");
   serialPrintf("  p            verificar IR (1 vuelta = %lu pulsos)\n",
-                (unsigned long)PULSES_PER_REV);
+                (unsigned long)pulsesPerRev);
+  serialPrintln("  cfg          muestra la config del sensor; cfg p <1..512> | mp <200..20000 us> | win <20..500 ms>");
+  serialPrintln("  pid <kp> <ki> <kd> <tf>   ganancias del PID (kp 0..100, ki 0..1000, kd 0..100, tf 0..5 s)");
+  serialPrintln("  ref <rate> <w_stop>       rampa de referencia: rad/s^2 (0.1..5000) y rad/s final (0..1000)");
+  serialPrintln("  info         parametros activos (pines, servo, sensor, PID, referencia)");
+  serialPrintln("  runpid <pwm_ini> <spinup_ms> <pre_ms> <dur_ms>");
+  serialPrintln("               acelera, registra PRE, corta el motor y frena con PID siguiendo la rampa (CSV de 15 columnas)");
   serialPrintln("  s <deg>      calibrar servo 0..180 (motor apagado), de 5 en 5 grados");
   serialPrintln("  m <pwm>      motor a lazo abierto, pwm 0..255, freno liberado");
   serialPrintln("  u <val>      apaga motor y frena con intensidad 0.0..1.0 (0 = liberar)");
@@ -594,7 +763,7 @@ void procesarComando(String line) {
     return;
   }
 
-  if ((cmd == "h" || cmd == "p" || cmd == "x") && n != 1) {
+  if ((cmd == "h" || cmd == "p" || cmd == "x" || cmd == "info") && n != 1) {
     serialPrintln("#ERR este comando no acepta argumentos");
     return;
   }
@@ -612,7 +781,7 @@ void procesarComando(String line) {
     resetPulsos();
     mode = MODE_PULSE_CHECK;
     serialPrintf("#OK verificacion IR: gire el disco 1 vuelta a mano; esperado %lu pulsos. 'x' para salir\n",
-                  (unsigned long)PULSES_PER_REV);
+                  (unsigned long)pulsesPerRev);
 
   } else if (cmd == "s") {
     float deg;
@@ -637,6 +806,60 @@ void procesarComando(String line) {
     mode = MODE_MANUAL;
     aplicarFreno(u);                 // si u>0 tambien apaga el motor
     serialPrintf("#OK freno u=%.2f (servo %.1f deg), motor PWM=%d\n", uBrake, servoDeg, motorPwm);
+
+  } else if (cmd == "cfg") {
+    uint32_t v;
+    if (n == 1) {
+      // solo muestra
+    } else if (n == 3 && t[1] == "p" && leerEntero(t[2], 1, 512, v)) {
+      pulsesPerRev = v;
+    } else if (n == 3 && t[1] == "mp" && leerEntero(t[2], 200, 20000, v)) {
+      portENTER_CRITICAL(&isrMux);
+      minPulseUs = v;
+      portEXIT_CRITICAL(&isrMux);
+    } else if (n == 3 && t[1] == "win" && leerEntero(t[2], 20, 500, v)) {
+      speedWindowUs = v * 1000UL;
+    } else {
+      serialPrintln("#ERR uso: cfg | cfg p <1..512> | cfg mp <200..20000 us> | cfg win <20..500 ms>");
+      return;
+    }
+    serialPrintf("#OK cfg P=%lu min_pulso=%lu us ventana=%lu ms\n", (unsigned long)pulsesPerRev,
+                  (unsigned long)minPulseUs, (unsigned long)(speedWindowUs / 1000UL));
+
+  } else if (cmd == "info") {
+    imprimirInfo();
+
+  } else if (cmd == "pid") {
+    float kp, ki, kd, tf;
+    if (n != 5 || !leerReal(t[1], 0, 100, kp) || !leerReal(t[2], 0, 1000, ki) ||
+        !leerReal(t[3], 0, 100, kd) || !leerReal(t[4], 0, 5, tf)) {
+      serialPrintln("#ERR uso: pid <kp 0..100> <ki 0..1000> <kd 0..100> <tf 0..5 s>");
+      return;
+    }
+    pidGains = {kp, ki, kd, tf};
+    pidReset();
+    serialPrintf("#OK pid kp=%.4f ki=%.4f kd=%.4f tf=%.3f s\n", pidGains.kp, pidGains.ki, pidGains.kd, pidGains.tf);
+
+  } else if (cmd == "ref") {
+    float rate, wstop;
+    if (n != 3 || !leerReal(t[1], 0.1f, 5000, rate) || !leerReal(t[2], 0, 1000, wstop)) {
+      serialPrintln("#ERR uso: ref <rate rad/s^2 0.1..5000> <w_stop rad/s 0..1000>");
+      return;
+    }
+    refRate = rate;
+    refWStop = wstop;
+    serialPrintf("#OK ref rate=%.2f rad/s^2, w_stop=%.2f rad/s\n", refRate, refWStop);
+
+  } else if (cmd == "runpid") {
+    uint32_t pwm, spinup, pre, duration;
+    if (n != 5 || !leerEntero(t[1], 1, MOTOR_PWM_MAX, pwm) ||
+        !leerEntero(t[2], TS_US / 1000, MAX_STAGE_MS, spinup) ||
+        !leerEntero(t[3], 0, MAX_STAGE_MS, pre) ||
+        !leerEntero(t[4], TS_US / 1000, MAX_STAGE_MS, duration)) {
+      serialPrintln("#ERR uso: runpid <pwm 1..255> <spinup_ms> <pre_ms> <dur_ms>; h = limites");
+      return;
+    }
+    iniciarEnsayoPid((int)pwm, spinup, pre, duration);
 
   } else if (cmd == "step") {
     uint32_t pwm, spinup, pre, duration;
