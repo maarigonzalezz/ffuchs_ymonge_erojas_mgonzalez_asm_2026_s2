@@ -1,9 +1,9 @@
 {
   "matlab": {
     "matlab_version": "26.2.0.3433840 (R2026b) Update 1",
-    "passed": 20,
+    "passed": 28,
     "failed": 0,
-    "skipped": 2,
+    "skipped": 1,
     "tests": [
       "test_frenado/testSchemaAndFinite",
       "test_frenado/testDuplicateTimeAndPulses",
@@ -26,34 +26,44 @@
       "test_frenado/testMetadataRowCountAndCommand",
       "test_frenado/testMissingToolboxDiagnostic",
       "test_frenado/testToolboxResponseWithJitter",
-      "test_frenado/testCompletePipeline"
+      "test_frenado/testCompletePipeline",
+      "test_frenado/testRunpidSchemaAndValidation",
+      "test_frenado/testRunpidLoaderAndGeneratedSuite",
+      "test_frenado/testRunpidCaptureProtocolAndTimeouts",
+      "test_frenado/testM1ModelContractAndValidation",
+      "test_frenado/testM2DisenoPidEstabilidadYComandos",
+      "test_frenado/testE1IdentificacionSemiautomaticaConMock",
+      "test_frenado/testAuditEdgeCasesAndDefaults"
     ]
   },
   "python": {
-    "passed": 13,
+    "passed": 15,
     "failed": 0,
     "fuzz_protocol_sequences": 10000
   },
   "limitations": [
-    "Control System Toolbox is licensed but not installed: step/interpolation and complete graphics pipeline tests are skipped.",
-    "No physical ESP32 tests."
+    "testMissingToolboxDiagnostic filtered by assumption because Control System Toolbox is installed and verified.",
+    "Physical ESP32 serial stream simulated with mocks (no live USB hardware attached during CI run)."
   ],
   "sha256": {
-    "proyecto_2/matlab/captura_serial.py": "b6bc4939f73777e24598c92e04a1d8afa763902cd5dc5176143ca09f65991c50",
-    "proyecto_2/matlab/captura_serial_esp32.m": "dacd50727d51fdfeb6060c861ea80f83404358e675bd0b3909634f1360232064",
-    "proyecto_2/matlab/generar_datos_ejemplo.m": "2bd3081cedeeaa1cf06f6ca5d6ed27a7c075af95655a915e3949bb64c5fc65e7",
-    "proyecto_2/matlab/caracterizacion_planta.m": "52c277e68b2b763071025d62e951cb36bd0abc7bd55b2e818fbac3a55d0d620e",
-    "proyecto_2/matlab/+frenado/cargarEnsayoCSV.m": "bd4caa0a7678820250e77889319741b991e1fbf63369e10fb0515ed2d7b56435",
-    "proyecto_2/matlab/+frenado/leerCSV.m": "785ec6c4da7d8419f6fb277c71dcf71f248877e258e7f9aac63fbaba3adab1d4",
-    "proyecto_2/matlab/+frenado/evaluarDeltaW.m": "9546f71f806d581f3af12ea77b5f0fca635c406f3b6e56fcc7f4be987522be93",
-    "proyecto_2/matlab/+frenado/tiemposCaptura.m": "7abee22a5a26bae43de2c9879c2169829a610149cf51d253f0b3c18d2760950b",
-    "proyecto_2/matlab/+frenado/respuestaEscalon.m": "a683bb20a8757755527db5777678b15b975155212dad6f318c967bf61cdd3f2e",
-    "proyecto_2/matlab/+frenado/evaluarCoastdown.m": "cb0ff0f30644acffdc009f4275503b42305332facb91937c8aeb4c2c86382f7b",
-    "proyecto_2/matlab/+frenado/capturarFlujo.m": "7a31a7c9de421350f908ca8e350f233396d43425d9eac4b64d373b817658696c",
-    "proyecto_2/matlab/+frenado/identificar.m": "0466ee995cd937db018583d536475b9cade7b7d68c29d567c5eb8d97e30a512d",
-    "proyecto_2/matlab/+frenado/validarTabla.m": "01c76917a4b82284231545a7d5e27f31a3d2896fed571b9a28932f3b72fa39e5",
-    "proyecto_2/matlab/+frenado/validarComandoTabla.m": "24fd40570c55d2cf9bf16e82ef96f92ba8e90f5f5e4e51f458f19c1f984949ee",
-    "proyecto_2/matlab/tests/test_frenado.m": "16feb682cbff9c61f7b55abed0dc9321a5fc3482e2f125bad94bdc487c03327f",
-    "proyecto_2/matlab/tests/test_capture.py": "ec06333dd1da78799289e8ff54eb7152144e916ad396ec0e04013b96658854b8"
+    "proyecto_2/matlab/captura_serial.py": "2479d5c3a73baf5a20350985d7347839ed7f721d4975ef0b02448a29d4fca547",
+    "proyecto_2/matlab/captura_serial_esp32.m": "79b10e6f4135910f07176f80b7580e3571861117e00bb01ae6c056c6983ecfc9",
+    "proyecto_2/matlab/generar_datos_ejemplo.m": "9360d24b82c995bd0dd212b3771cdceab2df50cdb2dd920f1434e9e9ffae12a8",
+    "proyecto_2/matlab/caracterizacion_planta.m": "30378524143bb890b98e1fb44172150087ad36027707c6b8438c12b7b58c2579",
+    "proyecto_2/matlab/diseno_pid.m": "6fcbc056fbddc02426c861b88f9708a9dbf3957658b6ec389f3878edafd86f87",
+    "proyecto_2/matlab/identificacion_semiautomatica.m": "5d18b96516f3449b35d35c4e5c19860259d0a32f6665d5fa894b42952c8bf713",
+    "proyecto_2/matlab/+frenado/cargarEnsayoCSV.m": "d4c8d225ea5ad9bd2b834ec219612237ef7d8bda5ab7a247de4a640794a5a816",
+    "proyecto_2/matlab/+frenado/leerCSV.m": "a72120f8ab3350761679d3867c809742628f1c76bd24d1cd0070f1ddcf22968d",
+    "proyecto_2/matlab/+frenado/evaluarDeltaW.m": "a3aea3035ab2a54cf99d5bc235ec00c19bf5e50863d23084a9d565b2039d34b2",
+    "proyecto_2/matlab/+frenado/tiemposCaptura.m": "b925626a754e873a3185fa9f739c840a7d4a681533d6fcdc84c256334b7c2abf",
+    "proyecto_2/matlab/+frenado/respuestaEscalon.m": "9950f980ecc958a20c3eb7bf12121c7ea5fae50c81484f2259c95f7c20e538a4",
+    "proyecto_2/matlab/+frenado/evaluarCoastdown.m": "c081bac92ca7c791ed9b77764c19771844312f3e13d84f7ea7e8cb24f7f06b0a",
+    "proyecto_2/matlab/+frenado/capturarFlujo.m": "558679365f8ff8536704ba559724ce5835c2b3ade83bbcc9e22611b9310ea8da",
+    "proyecto_2/matlab/+frenado/identificar.m": "29f183d4974690c79c5f12caca592f73749d27ddda32d6ac2dd52a93531e35c1",
+    "proyecto_2/matlab/+frenado/validarTabla.m": "979c470466d55bebf819f6a03e326831787414989f118f51367f026a585ab3a6",
+    "proyecto_2/matlab/+frenado/validarComandoTabla.m": "96ba46c49303e99559dbe3b2424e99697bd5a89a8de9ed87b32748530ba98816",
+    "proyecto_2/matlab/+frenado/referenciaRampa.m": "277bb6f6b74c6473ccd3c3213b05799834ab3b4ea1638caddca773ab619a2c81",
+    "proyecto_2/matlab/tests/test_frenado.m": "6bb68082622ee567b7e26d226b95f0ff48afa069504f67c7c703bc3c5cbc6efe",
+    "proyecto_2/matlab/tests/test_capture.py": "96835c94140fab3f422cd54a2c1b6b45dfa77c105670ec3b44d473bdd0c24025"
   }
 }

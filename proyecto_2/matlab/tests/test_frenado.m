@@ -402,6 +402,36 @@ function testE1IdentificacionSemiautomaticaConMock(test)
     verifyTrue(test,resEj.estable_z);
 end
 
+function testAuditEdgeCasesAndDefaults(test)
+    assumeTrue(test,~isempty(which("tf")),"Control System Toolbox no esta instalado.");
+
+    % 1) Llamada de 1 argumento a cargarEnsayoCSV: runpid usa w_meas, step usa rpm_raw
+    folder = string(tempname(test.TestData.temp));
+    generar_datos_ejemplo(folder);
+    stepDefault = frenado.cargarEnsayoCSV(fullfile(folder,"coastdown_1.csv"));
+    verifyFalse(test,stepDefault.filtrada);
+
+    pidDefault = frenado.cargarEnsayoCSV(fullfile(folder,"ajuste","ajuste_PID.csv"));
+    verifyTrue(test,pidDefault.filtrada);
+    verifyEqual(test,pidDefault.w_val,pidDefault.w_meas_val,"AbsTol",1e-12);
+    verifyLessThan(test,max(abs((pidDefault.w_val - pidDefault.w_ref_val) - pidDefault.error_val)),0.05);
+
+    % 2) Casos borde en diseno_pid: integrador puro (a=0) y retardo nulo (L=0) + JSON
+    casos = [ ...
+        struct("a",0.0, "c0",3.6,"Kb_J",22.5,"L",0.08,"Gp",tf(-22.5,[1,0.0], "InputDelay",0.08)), ...
+        struct("a",0.28,"c0",3.6,"Kb_J",22.5,"L",0.0, "Gp",tf(-22.5,[1,0.28],"InputDelay",0.0)) ...
+    ];
+    for k = 1:numel(casos)
+        D = diseno_pid(Modelo=casos(k),CarpetaResultados=test.TestData.temp, ...
+            GuardarFiguras=false,MostrarFiguras=false);
+        verifyTrue(test,D.estable_z);
+        verifyLessThan(test,D.max_abs_polo_Tz,1.0);
+        verifyTrue(test,isfile(D.ruta_condiciones_json));
+        cond = jsondecode(fileread(D.ruta_condiciones_json));
+        verifyTrue(test,isfield(cond,"v1") && isfield(cond,"v2") && isfield(cond,"cmd_pid"));
+    end
+end
+
 function lines = tablaATranscript(T, result)
     n = height(T);
     body = strings(n, 1);

@@ -28,7 +28,7 @@ arguments
     opciones.ArchivoValidacion (1,1) string = "step_u07_1.csv"
     % --- Opciones de salida y preprocesamiento ---
     opciones.CarpetaResultados (1,1) string = ""
-    opciones.ActualizarModeloRaiz (1,1) logical = false
+    opciones.ActualizarModeloRaiz logical {mustBeScalarOrEmpty} = logical.empty
     opciones.GuardarFiguras (1,1) logical = true
     opciones.MostrarFiguras (1,1) logical = true
     opciones.UsarSenalFiltrada (1,1) logical = false
@@ -84,6 +84,11 @@ if strlength(opciones.CarpetaResultados) > 0
     carpetaResultados = fullfile(opciones.CarpetaResultados, modo);
 end
 carpetaResultados = fullfile(carpetaResultados, string(datetime("now", "Format", "yyyyMMdd_HHmmss_SSS")));
+if isempty(opciones.ActualizarModeloRaiz)
+    actualizarRaiz = strlength(opciones.CarpetaResultados) == 0;
+else
+    actualizarRaiz = opciones.ActualizarModeloRaiz;
+end
 visibilidad = "on";
 if ~opciones.MostrarFiguras, visibilidad = "off"; end
 
@@ -411,7 +416,7 @@ rutaMat = fullfile(carpetaResultados, "modelo_planta_identificado.mat");
 save(rutaMat, "Gp", "a", "c0", "Kb_J", "L", "Gp_sin_retardo", "modelo");
 fprintf("Modelo guardado en:\n  %s\n", rutaMat);
 
-if opciones.ActualizarModeloRaiz
+if actualizarRaiz
     rutaMatRaiz = fullfile(rutaBase, "modelo_planta_identificado.mat");
     save(rutaMatRaiz, "Gp", "a", "c0", "Kb_J", "L", "Gp_sin_retardo", "modelo");
     fprintf("Copia canonica actualizada en:\n  %s\n", rutaMatRaiz);

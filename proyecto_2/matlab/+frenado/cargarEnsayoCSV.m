@@ -3,7 +3,7 @@ function ensayo = cargarEnsayoCSV(path, useFiltered, omegaMin, minSamples, requi
 % Acepta formato step (9 cols) y formato runpid (15 cols, distinguido por ctrl_mode).
     arguments
         path (1,1) string
-        useFiltered (1,1) logical = false
+        useFiltered logical {mustBeScalarOrEmpty} = logical.empty
         omegaMin (1,1) double {mustBeFinite,mustBeNonnegative} = 4
         minSamples (1,1) double {mustBeInteger,mustBeGreaterThanOrEqual(minSamples,3)} = 8
         requireMetadata (1,1) logical = false
@@ -31,6 +31,9 @@ function ensayo = cargarEnsayoCSV(path, useFiltered, omegaMin, minSamples, requi
     end
 
     isRunpid = ismember("ctrl_mode", string(T.Properties.VariableNames));
+    if isempty(useFiltered)
+        useFiltered = isRunpid; % runpid usa w_meas (coherente con error = w_meas - w_ref); step usa rpm_raw
+    end
     if isRunpid
         postMask = T.phase == "PID" | T.phase == "BRAKE";
         idx0 = find(postMask, 1);

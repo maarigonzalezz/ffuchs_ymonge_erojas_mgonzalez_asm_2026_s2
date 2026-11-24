@@ -30,7 +30,7 @@ arguments
     opciones.RuidoSimRadS (1,1) double {mustBeNonnegative,mustBeFinite} = 0.25
     opciones.Seed (1,1) double {mustBeInteger,mustBeNonnegative} = 42
     opciones.CarpetaResultados (1,1) string = ""
-    opciones.ActualizarRaiz (1,1) logical = false
+    opciones.ActualizarRaiz logical {mustBeScalarOrEmpty} = logical.empty
     opciones.GuardarFiguras (1,1) logical = true
     opciones.MostrarFiguras (1,1) logical = true
 end
@@ -256,6 +256,11 @@ if strlength(opciones.CarpetaResultados) > 0
     carpetaResultados = fullfile(opciones.CarpetaResultados, "diseno_pid");
 end
 carpetaResultados = fullfile(carpetaResultados, string(datetime("now", "Format", "yyyyMMdd_HHmmss_SSS")));
+if isempty(opciones.ActualizarRaiz)
+    actualizarRaiz = strlength(opciones.CarpetaResultados) == 0;
+else
+    actualizarRaiz = opciones.ActualizarRaiz;
+end
 carpetaFiguras = fullfile(carpetaResultados, "figuras");
 if ~isfolder(carpetaFiguras), mkdir(carpetaFiguras); end
 
@@ -382,16 +387,32 @@ diseno = struct( ...
     "origen_modelo", origenModelo ...
 );
 
+condicionesDiseno = struct( ...
+    "nota", "Parametros de rampa de referencia (rad/s) generados por diseno_pid.m.", ...
+    "formula", "w_ref(t) = max(w_stop, w0 - r_ref * max(0, t))", ...
+    "cmd_pid", cmd_pid, ...
+    "cmd_ref_v1", cmd_ref_v1, ...
+    "cmd_ref_v2", cmd_ref_v2, ...
+    "v1", struct("tag", "v1", "rpm0", round(refV1.w0*30/pi, 1), "r_ref", refV1.r_ref, "w_stop", refV1.w_stop, "uOpen", refV1.u_open_eq), ...
+    "v2", struct("tag", "v2", "rpm0", round(refV2.w0*30/pi, 1), "r_ref", refV2.r_ref, "w_stop", refV2.w_stop, "uOpen", refV2.u_open_eq) ...
+);
+rutaCondJson = fullfile(carpetaResultados, "condiciones_diseno.json");
+escribirJson(rutaCondJson, condicionesDiseno);
+diseno.ruta_condiciones_json = rutaCondJson;
+fprintf("Condiciones de diseno guardadas en:\n  %s\n", rutaCondJson);
+
 rutaOut = fullfile(carpetaResultados, "diseno_pid_resultado.mat");
 save(rutaOut, "diseno", "Kp", "Ki", "Kd", "Tf", "Ts", "Cz", "Tz_d", "Gz_zoh_d", ...
               "refV1", "refV2", "cmd_pid", "cmd_ref_v1", "cmd_ref_v2");
 fprintf("Resultado de diseno guardado en:\n  %s\n", rutaOut);
 
-if opciones.ActualizarRaiz
+if actualizarRaiz
     rutaOutRaiz = fullfile(rutaBase, "diseno_pid_resultado.mat");
     save(rutaOutRaiz, "diseno", "Kp", "Ki", "Kd", "Tf", "Ts", "Cz", "Tz_d", "Gz_zoh_d", ...
                       "refV1", "refV2", "cmd_pid", "cmd_ref_v1", "cmd_ref_v2");
-    fprintf("Copia canonica actualizada en:\n  %s\n", rutaOutRaiz);
+    rutaCondRaiz = fullfile(rutaBase, "condiciones_diseno.json");
+    escribirJson(rutaCondRaiz, condicionesDiseno);
+    fprintf("Copia canonica actualizada en:\n  %s\n  %s\n", rutaOutRaiz, rutaCondRaiz);
 end
 
 end % diseno_pid
@@ -577,4 +598,13 @@ function fig = crearFiguraClara(tituloVentana, posicion, visibilidad)
         theme(fig, "light");
     catch
     end
+end
+
+function escribirJson(ruta, datos)
+    fid = fopen(ruta, "w");
+    if fid < 0
+        error("frenado:Write", "No se pudo abrir para escritura: %s", ruta);
+    end
+    cleanup = onCleanup(@() fclose(fid));
+    fprintf(fid, "%s\n", jsonencode(datos, "PrettyPrint", true));
 end
