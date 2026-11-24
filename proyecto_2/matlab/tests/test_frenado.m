@@ -292,6 +292,31 @@ function testRunpidCaptureProtocolAndTimeouts(test)
     verifyEqual(test,height(T),3);
 end
 
+function testM1ModelContractAndValidation(test)
+    assumeTrue(test,~isempty(which("tf")),"Control System Toolbox no esta instalado.");
+    folder=string(tempname(test.TestData.temp));
+    generar_datos_ejemplo(folder,GenerarRunpid=false);
+
+    % No permitir reutilizar el mismo ensayo para identificacion y validacion
+    verifyError(test,@() caracterizacion_planta( ...
+        CarpetaDatos=folder,ArchivoIdentificacion="step_u04_1.csv", ...
+        ArchivoValidacion="step_u04_1.csv",MostrarFiguras=false,GuardarFiguras=false), ...
+        "frenado:ValidationReuse");
+
+    model=caracterizacion_planta(CarpetaDatos=folder,CarpetaResultados=test.TestData.temp, ...
+        PulsosPorRev=32,MasaDiscoKg=0.100,MostrarFiguras=false,GuardarFiguras=false);
+    verifyEqual(test,model.P_pulsos,32);
+    verifyEqual(test,model.J_disco_kg_m2,0.5*0.100*0.065^2,"AbsTol",1e-10);
+    verifyGreaterThan(test,model.r2_val,0.90);
+    verifyTrue(test,model.validacion_ok);
+
+    matPath=fullfile(model.carpeta_resultados,"modelo_planta_identificado.mat");
+    S=load(matPath);
+    for campo=["Gp","a","c0","Kb_J","L","Gp_sin_retardo","modelo"]
+        verifyTrue(test,isfield(S,campo),"Falta variable en .mat: "+campo);
+    end
+end
+
 function path=writeTrial(test,T)
     path=string(tempname(test.TestData.temp))+".csv";writetable(T,path);
 end
