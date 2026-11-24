@@ -317,6 +317,40 @@ function testM1ModelContractAndValidation(test)
     end
 end
 
+function testM2DisenoPidEstabilidadYComandos(test)
+    assumeTrue(test,~isempty(which("tf")),"Control System Toolbox no esta instalado.");
+    modeloPrueba=struct("a",0.2778,"c0",3.5013,"Kb_J",21.7864,"L",0.0707, ...
+        "Gp",tf(-21.7864,[1,0.2778],"InputDelay",0.0707));
+    D=diseno_pid(Modelo=modeloPrueba,CarpetaResultados=test.TestData.temp, ...
+        MostrarFiguras=false,GuardarFiguras=true);
+
+    % Estabilidad en plano Z: todos los polos dentro del circulo unitario
+    verifyTrue(test,D.estable_z);
+    verifyLessThan(test,D.max_abs_polo_Tz,1.0);
+    verifyGreaterThan(test,D.Kp,0);
+    verifyGreaterThan(test,D.Ki,0);
+    verifyGreaterThanOrEqual(test,D.Kd,0);
+
+    % Realizabilidad de rampas: |w_dot_coast(w0)| < r_ref < |w_dot_{u=1}(w_stop)|
+    verifyGreaterThan(test,D.ref_v1.r_ref,D.ref_v1.r_min);
+    verifyLessThan(test,D.ref_v1.r_ref,D.ref_v1.r_max);
+    verifyGreaterThan(test,D.ref_v2.r_ref,D.ref_v2.r_min);
+    verifyLessThan(test,D.ref_v2.r_ref,D.ref_v2.r_max);
+
+    % Saturacion respetada en simulacion; PID mejora frente a solo P y lazo abierto fijo
+    verifyGreaterThanOrEqual(test,min(D.sim_v2_pid.u),0);
+    verifyLessThanOrEqual(test,max(D.sim_v2_pid.u),1);
+    verifyLessThan(test,D.sim_v2_pid.rmse,D.sim_v2_P.rmse);
+    verifyLessThan(test,D.sim_v2_pid.rmse,D.sim_v2_open.rmse);
+
+    % Comandos para Emanuel y artefactos generados
+    verifyTrue(test,startsWith(D.cmd_pid,"pid "));
+    verifyTrue(test,startsWith(D.cmd_ref_v1,"ref "));
+    verifyTrue(test,startsWith(D.cmd_ref_v2,"ref "));
+    verifyTrue(test,isfile(fullfile(D.carpeta_resultados,"diseno_pid_resultado.mat")));
+    verifyEqual(test,numel(dir(fullfile(D.carpeta_resultados,"figuras","*.png"))),3);
+end
+
 function path=writeTrial(test,T)
     path=string(tempname(test.TestData.temp))+".csv";writetable(T,path);
 end
