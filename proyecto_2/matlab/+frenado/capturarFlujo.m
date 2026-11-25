@@ -1,5 +1,6 @@
 function output = capturarFlujo(readLine, sendCommand, output, command, options)
 % Captura verificable, desacoplada del puerto para ensayar fallos sin hardware.
+% Soporta encabezados de formato step (9 cols) y runpid (15 cols).
     arguments
         readLine (1,1) function_handle
         sendCommand (1,1) function_handle
@@ -8,7 +9,7 @@ function output = capturarFlujo(readLine, sendCommand, output, command, options)
         options.TimeoutSeg (1,1) double = 20
         options.MostrarEnConsola (1,1) logical = true
     end
-    [waitLimit,dataLimit] = frenado.tiemposCaptura(command,options.TimeoutSeg);
+    [waitLimit,dataLimit,parts] = frenado.tiemposCaptura(command,options.TimeoutSeg);
     partial = regexprep(output,'\.csv$','.partial.csv','ignorecase');
     metadataPath = regexprep(output,'\.csv$','.capture.json','ignorecase');
     if partial == output || any(isfile([output,partial,metadataPath]))
@@ -23,7 +24,15 @@ function output = capturarFlujo(readLine, sendCommand, output, command, options)
     metadata = struct("command",command,"status","incomplete","result","", ...
                       "rows",0,"warnings",strings(0,1));
     state = "WAIT_START"; headerSeen = false; start = tic; limit = waitLimit;
-    header = "t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses";
+    headerStep = "t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses";
+    headerPid  = "t_ms,phase,ctrl_mode,motor_pwm,w_ref,w_meas,w_raw,error,u_brake,p_term,i_term,d_term,servo_deg,pulses,flags";
+    if isempty(parts)
+        allowedHeaders = [headerStep, headerPid];
+    elseif lower(parts(1)) == "runpid"
+        allowedHeaders = headerPid;
+    else
+        allowedHeaders = headerStep;
+    end
     try
         if strlength(strtrim(command)) > 0, sendCommand(command); end
         while state ~= "DONE"
@@ -56,7 +65,9 @@ function output = capturarFlujo(readLine, sendCommand, output, command, options)
                 metadata.warnings(end+1) = line;
             elseif state == "CAPTURE"
                 if ~headerSeen
-                    if line ~= header, error("frenado:Schema", "Encabezado incompatible."); end
+                    if ~ismember(line, allowedHeaders)
+                        error("frenado:Schema", "Encabezado incompatible.");
+                    end
                     headerSeen = true;
                 elseif startsWith(line,"#")
                     error("frenado:Protocol", "Texto de estado dentro del CSV.");
@@ -71,7 +82,7 @@ function output = capturarFlujo(readLine, sendCommand, output, command, options)
             end
         end
         clear closeFile;
-        T=frenado.leerCSV(partial); % rechaza filas corruptas antes de publicar
+        T = frenado.leerCSV(partial); % rechaza filas corruptas antes de publicar
         frenado.validarComandoTabla(T,command);
         if isfile(output), error("frenado:OutputExists", "El destino ya existe."); end
         [ok,message] = movefile(partial,output);
