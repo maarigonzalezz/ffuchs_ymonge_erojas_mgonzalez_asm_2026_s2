@@ -32,12 +32,19 @@ proyecto_2/
     ├── evaluacion_experimentos.m             # Evaluación de ajuste P/PI/PID y finales V1/V2 (figuras + .tex)
     ├── evaluacion_extras.m                   # Evaluación de extras E2 (polos/margen Z), E3, E4 y E5
     ├── captura_serial_esp32.m                # Captura directa ESP32 -> CSV desde MATLAB (serialport)
-    ├── captura_serial.py                     # Alternativa ligera en Python (pyserial) con --setup
+    ├── captura_serial.py                     # Alternativa ligera en Python (pyserial) con --setup y -f
+    ├── graficar_ensayos.py                   # Graficador universal desde terminal (invoca MATLAB -batch)
     ├── generar_datos_ejemplo.m               # Genera CSV sintéticos (step 9 cols + runpid 15 cols)
     ├── modelo_planta_identificado.mat        # Modelo canónico (Gp, a, c0, Kb_J, L)
     ├── diseno_pid_resultado.mat              # Ganancias, Cz, Tz_d y rampas de diseno_pid.m
     ├── condiciones_diseno.json               # Pares (r_ref, w_stop) y comandos pid/ref en JSON
-    ├── datos/                                # CSV reales de la maqueta y metadatos .capture.json
+    ├── datos/                                # CSV reales organizados por etapa
+    │   ├── identificacion/                   # Trío oficial M1 (coast-down + 2 escalones)
+    │   ├── ajuste/                           # Corridas oficiales P, PI, PID (Etapa 5)
+    │   ├── finales/                          # Corridas finales V1/V2 x OPEN/PID x 3 (Etapa 6)
+    │   ├── extras/                           # Corridas extras E2, E3, E4, E5
+    │   ├── pruebas_pid/                      # Pruebas exploratorias de sintonización
+    │   └── historico/                        # Capturas previas de depuración
     ├── datos_ejemplo/                        # CSV sintéticos (ajuste/, finales/ + condiciones_ejemplo.json, extras/)
     ├── figuras/                              # Figuras base de referencia
     ├── docs/                                 # Capturas de guía y CONTEXTO_EVALUACION_MARIANA.md

@@ -1,21 +1,21 @@
 {
   "nota": "Parametros de rampa de referencia (rad/s) generados por diseno_pid.m.",
   "formula": "w_ref(t) = max(w_stop, w0 - r_ref * max(0, t))",
-  "cmd_pid": "pid 0.18306 0.33186 0.00194 0.0600",
-  "cmd_ref_v1": "ref 18.518 4.00",
-  "cmd_ref_v2": "ref 20.712 4.00",
+  "cmd_pid": "pid 0.03673 0.02500 0.00115 0.0600",
+  "cmd_ref_v1": "ref 37.388 5.00",
+  "cmd_ref_v2": "ref 37.687 5.00",
   "v1": {
     "tag": "v1",
-    "rpm0": 320,
-    "r_ref": 18.517992154018419,
-    "w_stop": 4,
-    "uOpen": 0.45010525688987496
+    "rpm0": 286.5,
+    "r_ref": 37.3876995170171,
+    "w_stop": 5,
+    "uOpen": 0.423169122781902
   },
   "v2": {
     "tag": "v2",
-    "rpm0": 450,
-    "r_ref": 20.711620200291424,
-    "w_stop": 4,
-    "uOpen": 0.4639932778960606
+    "rpm0": 362.9,
+    "r_ref": 37.687392376853524,
+    "w_stop": 5,
+    "uOpen": 0.4241832420721105
   }
 }
