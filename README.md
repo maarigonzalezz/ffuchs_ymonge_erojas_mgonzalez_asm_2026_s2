@@ -10,6 +10,9 @@ Repositorio grupal para **CE 1110 — Análisis de Señales Mixtas** (Instituto 
 ```text
 proyecto_2/
 ├── PLAN_DE_TRABAJO_PROYECTO_2.md             # Plan maestro incremental (requisitos mínimos y extras)
+├── firmware/
+│   └── freno_pid_esp32/
+│       └── freno_pid_esp32.ino               # Firmware ESP32: estimador por ventana, step, PID y hooks E3/E4
 └── matlab/
     ├── +frenado/                             # Paquete compartido (lectura, validación, identificación, rampas)
     │   ├── leerCSV.m                         # Lector dual para formato step (9 cols) y runpid (15 cols)
@@ -26,8 +29,10 @@ proyecto_2/
     ├── caracterizacion_planta.m              # M1 (Etapa 3): identifica Gp,L(s), valida e impulse(Gp)
     ├── diseno_pid.m                          # M2 (Etapa 4): c2d(ZOH), plano Z, rampas y simulación PID
     ├── identificacion_semiautomatica.m       # E1 (+2 pts): captura 3 ensayos + ajusta + sugiere PID
+    ├── evaluacion_experimentos.m             # Evaluación de ajuste P/PI/PID y finales V1/V2 (figuras + .tex)
+    ├── evaluacion_extras.m                   # Evaluación de extras E2 (polos/margen Z), E3, E4 y E5
     ├── captura_serial_esp32.m                # Captura directa ESP32 -> CSV desde MATLAB (serialport)
-    ├── captura_serial.py                     # Alternativa ligera en Python (pyserial)
+    ├── captura_serial.py                     # Alternativa ligera en Python (pyserial) con --setup
     ├── generar_datos_ejemplo.m               # Genera CSV sintéticos (step 9 cols + runpid 15 cols)
     ├── modelo_planta_identificado.mat        # Modelo canónico (Gp, a, c0, Kb_J, L)
     ├── diseno_pid_resultado.mat              # Ganancias, Cz, Tz_d y rampas de diseno_pid.m
@@ -38,7 +43,7 @@ proyecto_2/
     ├── docs/                                 # Capturas de guía y CONTEXTO_EVALUACION_MARIANA.md
     └── tests/
         ├── test_frenado.m                    # Suite unitaria y de integración en MATLAB (28 tests)
-        ├── test_capture.py                   # Suite de protocolo serial en Python (15 tests + fuzz)
+        ├── test_capture.py                   # Suite de protocolo serial en Python (31 tests + fuzz)
         └── validation_summary.json           # Resumen verificado y hashes SHA-256
 ```
 
@@ -81,7 +86,7 @@ El lazo de control PID en tiempo real corre **100 % en la ESP32**. MATLAB actúa
   * `runpid <pwm_ini> <spinup_ms> <pre_ms> <dur_ms>` — ensayo con el controlador PID digital en ESP32.
   * `pid <kp> <ki> <kd> <tf>` y `ref <rate_rad_s2> <w_stop_rad_s>` — configuración en vivo de ganancias (en $\text{rad/s}$) y rampa de referencia.
   * `x` — parada de emergencia inmediata (`motor_pwm = 0`, freno liberado).
-* **Marcadores obligatorios de captura:** `#START_CSV` antes del encabezado, `#END_CSV` al finalizar las muestras y `#RESULT parada_detectada` o `#RESULT duracion_maxima` al cierre.
+* **Marcadores obligatorios de captura:** `#START_CSV` antes del encabezado, `#END_CSV` al finalizar las muestras y `#RESULT parada_detectada`, `#RESULT duracion_maxima` o `#RESULT w_final_alcanzada` (solo `runpid`) al cierre.
 
 ### 4.2 Formato CSV `step` (9 columnas — lazo abierto)
 
@@ -182,39 +187,109 @@ ref <r_ref_v2> <w_stop>
 
 ---
 
-## 6. Flujo con hardware real y pruebas automatizadas (Windows y macOS)
+## 6. Manual rápido de pruebas físicas y recopilación de datos (copiar y pegar)
 
-### 6.1 Identificación semiautomática en vivo (1 comando — E1)
+### 6.0 Preparación y seguridad (antes de conectar)
 
-Con la ESP32 conectada por USB, ubica su puerto con `serialportlist("available")` (ej. `"COM5"` en Windows o `"/dev/cu.usbserial-0001"` en macOS, usando siempre `/dev/cu.*`) y corre:
+1. Carga `proyecto_2/firmware/freno_pid_esp32/freno_pid_esp32.ino` a la ESP32 desde Arduino IDE (`115200` baudios).
+2. Verifica que el disco gire libre, sin cables ni manos cerca, con el servo firme y el botón de parada (`GPIO33`) a mano (también podés enviar `x` por serial en cualquier momento).
+3. **Qué debe pasar al encender/resetear la ESP32:** motor quieto (`PWM = 0`) y servo en **`35°`** (zapata separada del disco).
 
-```matlab
-resumen = identificacion_semiautomatica("COM5", PwmIni=190, UIdent=0.40, UVal=0.70, PulsosPorRev=16);
+### 6.1 Chequeo rápido en Monitor Serial (115200 baudios)
+
+Antes de capturar CSVs, ejecuta en el Monitor Serial de Arduino IDE:
+
+```text
+info
+p
+```
+* Gira el disco **1 vuelta exacta a mano** y anota `#P pulsos=...` (**16** o **32** pulsos/vuelta; este valor es obligatorio para MATLAB). Envía `x` para salir.
+
+```text
+s 35
+s 49
+s 53
+x
+```
+* **Qué debe pasar:** en `35°` no roza el disco; en `49°` apenas hace primer contacto; en `53°` frena firme sin que el servo zumbe ni se trabe. *(Si en `49°` ya aprieta fuerte, bajar `SERVO_CONTACT_DEG` 1–2° en el `.ino`).*
+* **Importante:** **cierra el Monitor Serial de Arduino IDE** antes de correr Python o MATLAB, si no el puerto `COM` queda bloqueado.
+
+### 6.2 Ubicar el puerto serial
+
+Desde PowerShell/terminal en `proyecto_2/matlab` (instalar una vez `pip install pyserial` si falta):
+
+```bash
+python captura_serial.py --list
 ```
 
-Este comando dispara secuencialmente *coast-down* + dos escalones, valida $R^2$ sobre el segundo escalón, calcula las ganancias PID sugeridas y guarda todo en `datos/sesion_id_<timestamp>/` y `resultados/`. Para probar el flujo completo sin hardware conectado:
+*(En MATLAB: `serialportlist("available")`. En Windows verás algo como `COM5`; en macOS usa `/dev/cu.usbserial-...`).*
+
+### 6.3 Recopilar los 3 ensayos `step` para identificar la planta (M1)
+
+Sustituye `COM5` por tu puerto y ejecuta los 3 comandos uno por uno desde `proyecto_2/matlab`. *(Si contaste `16` pulsos/vuelta en el paso 6.1 y no editaste el `.ino`, agrega `--setup "cfg p 16"` antes de `--cmd` en cada línea).*
+
+1. **Coast-down (`u = 0`, freno suelto):**
+   ```bash
+   python captura_serial.py --port COM5 --cmd "step 200 0 3000 1000 10000" --out real_coastdown_1.csv
+   ```
+   *Qué debe pasar:* `0.5 s` en reposo (`35°`) → motor acelera `3 s` → gira estable `1 s` → corta motor y el disco se detiene **solo por fricción** (servo sigue en `35°`) → guarda `.csv` y `.capture.json` en `proyecto_2/matlab/datos/`.
+
+2. **Escalón suave (`u = 0.05` — el freno real es muy sensible):**
+   ```bash
+   python captura_serial.py --port COM5 --cmd "step 200 0.05 3000 1000 6000" --out real_step_u005_1.csv
+   ```
+   *Qué debe pasar:* acelera igual → corta motor → el servo toca suavemente (`~49.2°`) y detiene el disco claramente más rápido que el coast-down (`~0.8–1.5 s`) → al detenerse, **suelta la zapata de vuelta a `35°`**.
+
+3. **Escalón medio (`u = 0.20`, validación independiente):**
+   ```bash
+   python captura_serial.py --port COM5 --cmd "step 200 0.20 3000 1000 6000" --out real_step_u020_1.csv
+   ```
+   *Qué debe pasar:* frena todavía más rápido que `0.05` sin clavar en seco (ideal que tarde al menos `0.5 s` en frenar). Si `0.20` clava muy brusco, usar `0.10` o `0.15`.
+
+**Alternativa en 1 comando desde MATLAB (Extra E1):**
+
+```matlab
+resumen = identificacion_semiautomatica("COM5", PwmIni=200, UIdent=0.05, UVal=0.20, PulsosPorRev=32, MasaDiscoKg=0.08);
+```
+
+Dispara secuencialmente *coast-down* + dos escalones, valida $R^2$ sobre el segundo escalón y calcula automáticamente las ganancias PID y rampas sugeridas. Para probarlo sin hardware:
 
 ```matlab
 resumen = identificacion_semiautomatica("", ModoEjemplo=true);
 ```
 
-### 6.2 Captura individual de ensayos (`step` o `runpid`)
+### 6.4 Prueba en lazo cerrado (`runpid`)
+
+> **Nota:** al abrir el puerto serial la ESP32 se reinicia y las ganancias vuelven a `0`, por eso **siempre** envía `--setup "pid ..."` y `--setup "ref ..."` (o `Setup=[...]` en MATLAB) antes de `runpid`.
+
+* **Desde terminal (Python):**
+  ```bash
+  python captura_serial.py --port COM5 --setup "pid 0.006 0.02 0 0.05" --setup "ref 35 5" --cmd "runpid 200 3000 1000 8000" --out real_pid_1.csv
+  ```
+* **Desde MATLAB (`captura_serial_esp32.m`):**
+  ```matlab
+  PUERTO = "COM5"; % En macOS: "/dev/cu.usbserial-0001"
+
+  captura_serial_esp32(PUERTO, "step 200 0 3000 1000 10000", "real_coastdown_1.csv")
+  captura_serial_esp32(PUERTO, "step 200 0.05 3000 1000 6000", "real_step_u005_1.csv")
+  captura_serial_esp32(PUERTO, "runpid 200 3000 1000 8000", "real_pid_1.csv", ...
+      Setup=["pid 0.006 0.02 0 0.05", "ref 35 5"])
+  ```
+* **Qué debe pasar físicamente:** acelera `3 s` → `1 s` estable → corta motor → el servo **modula progresivamente** entre `49°` y `~50°` siguiendo la rampa sin golpes → al bajar a `5 rad/s` suelta la zapata a `35°` y cierra con `w_final_alcanzada`.
+
+### 6.5 Analizar los datos reales en MATLAB
+
+Con los 3 CSV reales en `proyecto_2/matlab/datos/`, ejecuta en MATLAB (reemplazando `PulsosPorRev` y los nombres si cambiaste `u`):
 
 ```matlab
-PUERTO = "COM5"; % En macOS: "/dev/cu.usbserial-0001"
-
-captura_serial_esp32(PUERTO, "step 190 0.0 3000 400 6000", "coastdown_1.csv")
-captura_serial_esp32(PUERTO, "step 190 0.4 3000 400 6000", "step_u04_1.csv")
-captura_serial_esp32(PUERTO, "runpid 190 3000 400 6000", "v1_pid_rep1.csv")
+caracterizacion_planta(UsarDatosEjemplo=false, PulsosPorRev=32, MasaDiscoKg=0.08, ...
+    ArchivoCoastdown="real_coastdown_1.csv", ...
+    ArchivoIdentificacion="real_step_u005_1.csv", ...
+    ArchivoValidacion="real_step_u020_1.csv")
+diseno_pid()
 ```
 
-Alternativa desde terminal con Python (`python3` en macOS):
-
-```bash
-python captura_serial.py --port COM5 --cmd "runpid 190 3000 400 6000" --out v1_pid_rep1.csv
-```
-
-### 6.3 Suite de pruebas automatizadas (sin hardware)
+### 6.6 Suite de pruebas automatizadas (sin hardware)
 
 * **En MATLAB** (desde `proyecto_2/matlab`):
   ```matlab
