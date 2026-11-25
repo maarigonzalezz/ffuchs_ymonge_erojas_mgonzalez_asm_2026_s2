@@ -56,7 +56,7 @@ const int      MOTOR_PWM_MAX  = 255;         // limite de seguridad (bajar para 
 const int      DEFAULT_START_PWM = 150;      // PWM del boton de inicio
 
 // ---------- Servo (valores de relleno, se calibran en la pieza 3) ----------
-float SERVO_RELEASE_DEG  = 44.0f;
+float SERVO_RELEASE_DEG  = 35.0f;
 float SERVO_CONTACT_DEG  = 49.0f;
 float SERVO_MAX_SAFE_DEG = 53.0f;
 const uint32_t SERVO_FREQ_HZ = 50;
