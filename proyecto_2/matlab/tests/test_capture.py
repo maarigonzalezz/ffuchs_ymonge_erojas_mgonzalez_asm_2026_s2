@@ -137,7 +137,7 @@ class CaptureTests(unittest.TestCase):
         lines = [
             b'#START_CSV\n',
             (capture.HEADER_RUNPID + '\n').encode(),
-            b'-20,PRE,PID,180,40.0,40.0,40.1,0,0,0,0,0,44,10,0\n',
+            b'-20,PRE,OPEN,180,0.0,40.0,40.1,0,0,0,0,0,44,10,0\n',
             b'0,PID,PID,0,40.0,40.0,40.0,0.0,0.0,0.0,0.0,0.0,44,12,1\n',
             b'20,PID,PID,0,39.6,39.9,40.0,0.3,0.03,0.02,0.01,0.0,49.12,14,0\n',
             b'#END_CSV\n',
@@ -158,7 +158,7 @@ class CaptureTests(unittest.TestCase):
                 lines = [
                     b'#START_CSV\n',
                     (capture.HEADER_RUNPID + '\n').encode(),
-                    b'-20,PRE,PID,180,40.0,40.0,40.1,0,0,0,0,0,44,10,0\n',
+                    b'-20,PRE,OPEN,180,0.0,40.0,40.1,0,0,0,0,0,44,10,0\n',
                     b'0,PID,PID,0,40.0,40.0,40.0,0.0,0.0,0.0,0.0,0.0,44,12,1\n',
                     bad,
                     b'#END_CSV\n',

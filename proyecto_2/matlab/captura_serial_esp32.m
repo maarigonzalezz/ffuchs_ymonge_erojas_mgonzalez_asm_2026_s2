@@ -1,6 +1,9 @@
 function archivoSalida = captura_serial_esp32(puerto, comandoStep, nombreArchivo, opciones)
 % Captura un ensayo y publica el CSV solo tras END_CSV + RESULT satisfactorio.
-% Ejemplo: captura_serial_esp32("COM5","step 180 .4 3000 400 6000","step_u04_1.csv")
+% Ejemplos:
+%   captura_serial_esp32("COM5","step 180 .4 3000 400 6000","step_u04_1.csv")
+%   captura_serial_esp32("COM5","runpid 200 3000 1000 8000","runpid_1.csv", ...
+%       Setup=["pid 0.006 0.02 0 0.05","ref 50 5"])
 % Las capturas fallidas quedan como *.partial.csv, con motivo en *.capture.json.
     arguments
         puerto (1,1) string = ""
@@ -10,6 +13,7 @@ function archivoSalida = captura_serial_esp32(puerto, comandoStep, nombreArchivo
         opciones.TimeoutSeg (1,1) double {mustBeFinite,mustBePositive} = 20
         opciones.CarpetaDestino (1,1) string = fullfile(fileparts(mfilename("fullpath")),"datos")
         opciones.MostrarEnConsola (1,1) logical = true
+        opciones.Setup (1,:) string = strings(0,1)
     end
     frenado.tiemposCaptura(comandoStep,opciones.TimeoutSeg); % validar antes de conectar
     if strlength(puerto)==0
@@ -29,7 +33,7 @@ function archivoSalida = captura_serial_esp32(puerto, comandoStep, nombreArchivo
     pending = uint8([]);
     archivoSalida = frenado.capturarFlujo(@readCompleteLine,@(s) writeline(sp,s), ...
         archivoSalida,comandoStep,TimeoutSeg=opciones.TimeoutSeg, ...
-        MostrarEnConsola=opciones.MostrarEnConsola);
+        MostrarEnConsola=opciones.MostrarEnConsola,Setup=opciones.Setup);
 
     function line = readCompleteLine()
         line = "";

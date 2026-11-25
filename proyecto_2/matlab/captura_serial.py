@@ -4,8 +4,11 @@ Ejemplos:
   python3 captura_serial.py --port /dev/cu.usbserial-0001 \
     --cmd "step 180 0.4 3000 400 6000" --out step_u04_1.csv
   python3 captura_serial.py --port COM5 \
-    --cmd "runpid 180 3000 400 6000" --out v1_pid_rep1.csv
+    --setup "pid 0.006 0.02 0 0.05" --setup "ref 50 5" \
+    --cmd "runpid 200 3000 1000 8000" --out v1_pid_rep1.csv
 
+Al abrir el puerto la ESP32 puede reiniciarse y las ganancias/rampa vuelven a sus
+valores por defecto (kp=ki=kd=0: no frena); --setup las reenvia antes del ensayo.
 Un CSV solo se publica tras END_CSV, RESULT satisfactorio y validacion de filas.
 En errores se conserva *.partial.csv y siempre se intenta enviar x.
 """
@@ -23,6 +26,7 @@ HEADER_RUNPID = (
     "t_ms,phase,ctrl_mode,motor_pwm,w_ref,w_meas,w_raw,error,"
     "u_brake,p_term,i_term,d_term,servo_deg,pulses,flags"
 )
+HEADER_PID = HEADER_RUNPID
 SUCCESS_RESULTS = {"parada_detectada", "duracion_maxima"}
 SUCCESS_RESULTS_PID = SUCCESS_RESULTS | {"w_final_alcanzada"}
 FLAG_U_MIN, FLAG_U_MAX, FLAG_ABS = 1, 2, 4   # bits de la columna flags (ver firmware)
@@ -102,7 +106,7 @@ def _validate_step_rows(reader, expected):
         if not all(math.isfinite(value) for value in values.values()):
             raise CaptureError("CSV con NaN o infinito.")
         t, pwm, u, servo = (values[k] for k in ("t_ms", "motor_pwm", "u_brake", "servo_deg"))
-        phase = row["phase"].upper()
+        phase = row["phase"].strip().upper()
         if t <= previous_time:
             raise CaptureError("Tiempo duplicado o no creciente.")
         if pwm != int(pwm) or not 0 <= pwm <= 255 or not 0 <= u <= 1 or not 0 <= servo <= 180:
@@ -143,89 +147,7 @@ def _validate_step_rows(reader, expected):
 
 
 def _validate_runpid_rows(reader, expected):
-    text_keys = {"phase", "ctrl_mode"}
-    previous_time = -math.inf
-    previous_pulses = None
-    braking = False
-    post_mode = None
-    brake_level = None
-    rows = post_rows = 0
-    for row in reader:
-        if None in row or any(value is None for value in row.values()):
-            raise CaptureError("Fila con numero incorrecto de columnas.")
-        try:
-            values = {key: float(value) for key, value in row.items() if key not in text_keys}
-        except ValueError as exc:
-            raise CaptureError("Columna numerica invalida.") from exc
-        if not all(math.isfinite(value) for value in values.values()):
-            raise CaptureError("CSV con NaN o infinito.")
-        t, pwm, u, servo = (values[k] for k in ("t_ms", "motor_pwm", "u_brake", "servo_deg"))
-        phase = row["phase"].strip().upper()
-        ctrl_mode = row["ctrl_mode"].strip().upper()
-        if ctrl_mode not in {"OPEN", "PID"}:
-            raise CaptureError("ctrl_mode invalido (esperado OPEN o PID).")
-        if t <= previous_time:
-            raise CaptureError("Tiempo duplicado o no creciente.")
-        if pwm != int(pwm) or not 0 <= pwm <= 255 or not 0 <= u <= 1 or not 0 <= servo <= 180:
-            raise CaptureError("Actuador fuera de rango.")
-        if any(values[k] < 0 for k in ("w_ref", "w_meas", "w_raw")):
-            raise CaptureError("Velocidad o referencia negativa.")
-        if expected and phase == "PRE" and pwm != int(expected[1]):
-            raise CaptureError("El CSV runpid no coincide con el PWM solicitado.")
-        if phase == "PRE":
-            if braking or t >= 0 or pwm <= 0 or u != 0:
-                raise CaptureError("Fase PRE inconsistente.")
-        elif phase in {"PID", "BRAKE"}:
-            if t < 0 or pwm != 0:
-                raise CaptureError("Fase de frenado inconsistente.")
-            if post_mode is None:
-                post_mode = ctrl_mode
-            elif ctrl_mode != post_mode:
-                raise CaptureError("ctrl_mode cambia durante el frenado.")
-            if ctrl_mode == "PID":
-                if abs(values["error"] - (values["w_meas"] - values["w_ref"])) > 0.05:
-                    raise CaptureError("error inconsistente con w_meas - w_ref.")
-            else:
-                if brake_level is not None and abs(u - brake_level) > 1e-6:
-                    raise CaptureError("En ctrl_mode=OPEN la accion de frenado debe ser constante.")
-                brake_level = u
-            braking = True
-            post_rows += 1
-        else:
-            raise CaptureError("Fase desconocida en formato runpid.")
-        pulses = values["pulses"]
-        if pulses != int(pulses) or not 0 <= pulses <= 4294967295:
-            raise CaptureError("Conteo de pulsos invalido.")
-        if previous_pulses is not None and pulses < previous_pulses:
-            if previous_pulses - pulses < 2147483648:
-                raise CaptureError("Conteo de pulsos retrocede.")
-        flags = values["flags"]
-        if flags != int(flags) or not 0 <= flags <= 4294967295:
-            raise CaptureError("Columna flags invalida.")
-        previous_time, previous_pulses = t, pulses
-        rows += 1
-    if post_rows < 2:
-        raise CaptureError("Se requieren al menos dos filas de frenado.")
-    return rows
-
-
-def validate_csv(path, command=""):
-    """Valida sin rellenar silenciosamente columnas, valores o muestras perdidas."""
-    expected = command.split() if command.strip() else None
-    with Path(path).open(newline="", encoding="ascii") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames == HEADER.split(","):
-            if expected and expected[0].lower() == "runpid":
-                raise CaptureError("El comando runpid requiere encabezado de 15 columnas.")
-            return _validate_step_rows(reader, expected)
-        if reader.fieldnames == HEADER_RUNPID.split(","):
-            return _validate_runpid_rows(reader, expected)
-        raise CaptureError("Encabezado CSV incompatible.")
-
-
-def validate_pid_rows(reader, command=""):
-    """CSV de runpid: PRE en lazo abierto (OPEN) y BRAKE con el PID (PID), sin rellenar nada."""
-    expected = command.split() if command.strip() else None
+    """CSV de runpid: PRE en lazo abierto (OPEN) y BRAKE/PID en lazo cerrado (PID)."""
     if expected and expected[0].lower() != "runpid":
         raise CaptureError("El CSV no coincide con el comando solicitado.")
     previous_time = -math.inf
@@ -245,7 +167,8 @@ def validate_pid_rows(reader, command=""):
         t, pwm, u, servo = (values[k] for k in ("t_ms", "motor_pwm", "u_brake", "servo_deg"))
         wref, wmeas, wraw, err = (values[k] for k in ("w_ref", "w_meas", "w_raw", "error"))
         p, i, d, flags = (values[k] for k in ("p_term", "i_term", "d_term", "flags"))
-        phase, mode = row["phase"].upper(), row["ctrl_mode"].upper()
+        phase = row["phase"].strip().upper()
+        mode = row["ctrl_mode"].strip().upper()
         if t <= previous_time:
             raise CaptureError("Tiempo duplicado o no creciente.")
         if pwm != int(pwm) or not 0 <= pwm <= 255 or not 0 <= u <= 1 or not 0 <= servo <= 180:
@@ -260,7 +183,7 @@ def validate_pid_rows(reader, command=""):
             if (braking or mode != "OPEN" or t >= 0 or pwm <= 0 or u != 0
                     or any(v != 0 for v in (wref, err, p, i, d, flags))):
                 raise CaptureError("Fase PRE inconsistente.")
-        elif phase == "BRAKE":
+        elif phase in {"BRAKE", "PID"}:
             if mode != "PID" or t < 0 or pwm != 0 or wref < 0:
                 raise CaptureError("Fase de frenado inconsistente.")
             if previous_ref is not None and wref > previous_ref + 1e-3:
@@ -293,14 +216,35 @@ def validate_pid_rows(reader, command=""):
     return rows
 
 
+def validate_csv(path, command=""):
+    """Valida sin rellenar silenciosamente columnas, valores o muestras perdidas."""
+    expected = command.split() if command.strip() else None
+    with Path(path).open(newline="", encoding="ascii") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames == HEADER.split(","):
+            if expected and expected[0].lower() == "runpid":
+                raise CaptureError("El comando runpid requiere encabezado de 15 columnas.")
+            return _validate_step_rows(reader, expected)
+        if reader.fieldnames == HEADER_RUNPID.split(","):
+            return _validate_runpid_rows(reader, expected)
+        raise CaptureError("Encabezado CSV incompatible.")
+
+
 class CaptureProtocol:
     """Maquina de estados independiente del puerto serial para poder probarla."""
-    def __init__(self, handle, allowed_headers=None):
+    def __init__(self, handle, allowed_headers=None, success=SUCCESS_RESULTS):
         self.handle = handle
-        self.allowed_headers = set(allowed_headers or (HEADER, HEADER_RUNPID))
+        if allowed_headers is None:
+            self.allowed_headers = {HEADER, HEADER_RUNPID}
+        elif isinstance(allowed_headers, str):
+            self.allowed_headers = {allowed_headers}
+        else:
+            self.allowed_headers = set(allowed_headers)
+        self.success = set(success)
         self.state = "WAIT_START"
         self.result = None
         self.header_seen = False
+        self.seen_header = None
         self.rows = 0
         self.warnings = []
 
@@ -315,7 +259,10 @@ class CaptureProtocol:
             self.state = "WAIT_RESULT"
         elif line.startswith("#RESULT "):
             self.result = line[8:].strip()
-            if self.state != "WAIT_RESULT" or self.result not in self.success:
+            valid_results = (
+                SUCCESS_RESULTS if self.seen_header == HEADER else self.success
+            )
+            if self.state != "WAIT_RESULT" or self.result not in valid_results:
                 raise CaptureError(f"Ensayo no valido: {self.result}")
             self.state = "DONE"
         elif line.startswith("#ERR"):
@@ -329,6 +276,7 @@ class CaptureProtocol:
                 if line not in self.allowed_headers:
                     raise CaptureError("Encabezado CSV incompatible.")
                 self.header_seen = True
+                self.seen_header = line
             elif line.startswith("#"):
                 raise CaptureError("Texto de estado dentro del CSV.")
             else:
@@ -347,16 +295,21 @@ def capture(ser, destination, command="", timeout=20.0, clock=time.monotonic, se
         if path.exists():
             raise FileExistsError(f"No se sobrescribe: {path}")
     wait_timeout, data_timeout = capture_timeouts(command, timeout)
-    allowed_headers = None
-    if command.strip():
-        verb = command.split()[0].lower()
-        allowed_headers = {HEADER_RUNPID} if verb == "runpid" else {HEADER}
+    setup = check_setup(setup)
+    if is_pid_command(command):
+        allowed_headers, success = {HEADER_RUNPID}, SUCCESS_RESULTS_PID
+    elif command.strip():
+        allowed_headers, success = {HEADER}, SUCCESS_RESULTS
+    else:
+        allowed_headers, success = {HEADER, HEADER_RUNPID}, SUCCESS_RESULTS_PID
     destination.parent.mkdir(parents=True, exist_ok=True)
     metadata = {"command": command, "setup": setup, "status": "incomplete", "result": None}
     protocol = None
     try:
         with partial.open("x", encoding="ascii", newline="") as handle:
-            protocol = CaptureProtocol(handle, allowed_headers=allowed_headers)
+            protocol = CaptureProtocol(handle, allowed_headers=allowed_headers, success=success)
+            for line in setup:
+                ser.write((line + "\n").encode("ascii"))
             if command.strip():
                 ser.write((command.strip() + "\n").encode("ascii"))
             deadline = clock() + wait_timeout

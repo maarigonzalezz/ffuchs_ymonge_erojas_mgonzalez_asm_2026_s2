@@ -1,6 +1,7 @@
 function output = capturarFlujo(readLine, sendCommand, output, command, options)
 % Captura verificable, desacoplada del puerto para ensayar fallos sin hardware.
-% Soporta encabezados de formato step (9 cols) y runpid (15 cols).
+% Soporta encabezados de formato step (9 cols) y runpid (15 cols), comandos
+% previos de configuracion (Setup: pid, ref, cfg) y cierre w_final_alcanzada.
     arguments
         readLine (1,1) function_handle
         sendCommand (1,1) function_handle
@@ -8,8 +9,10 @@ function output = capturarFlujo(readLine, sendCommand, output, command, options)
         command (1,1) string = ""
         options.TimeoutSeg (1,1) double = 20
         options.MostrarEnConsola (1,1) logical = true
+        options.Setup (1,:) string = strings(0,1)
     end
     [waitLimit,dataLimit,parts] = frenado.tiemposCaptura(command,options.TimeoutSeg);
+    setupCmds = validarSetup(options.Setup);
     partial = regexprep(output,'\.csv$','.partial.csv','ignorecase');
     metadataPath = regexprep(output,'\.csv$','.capture.json','ignorecase');
     if partial == output || any(isfile([output,partial,metadataPath]))
@@ -21,11 +24,13 @@ function output = capturarFlujo(readLine, sendCommand, output, command, options)
     if fid < 0, error("frenado:Write", "No se pudo abrir %s",partial); end
     closeFile = onCleanup(@() fclose(fid));
     stop = onCleanup(@() safeStop(sendCommand));
-    metadata = struct("command",command,"status","incomplete","result","", ...
+    metadata = struct("command",command,"setup",setupCmds,"status","incomplete","result","", ...
                       "rows",0,"warnings",strings(0,1));
-    state = "WAIT_START"; headerSeen = false; start = tic; limit = waitLimit;
+    state = "WAIT_START"; headerSeen = false; seenHeader = ""; start = tic; limit = waitLimit;
     headerStep = "t_ms,phase,motor_pwm,u_brake,servo_deg,rpm_raw,rpm_filt,rad_s,pulses";
     headerPid  = "t_ms,phase,ctrl_mode,motor_pwm,w_ref,w_meas,w_raw,error,u_brake,p_term,i_term,d_term,servo_deg,pulses,flags";
+    validStepResults = ["parada_detectada","duracion_maxima"];
+    validPidResults  = [validStepResults,"w_final_alcanzada"];
     if isempty(parts)
         allowedHeaders = [headerStep, headerPid];
     elseif lower(parts(1)) == "runpid"
@@ -34,6 +39,9 @@ function output = capturarFlujo(readLine, sendCommand, output, command, options)
         allowedHeaders = headerStep;
     end
     try
+        for k = 1:numel(setupCmds)
+            sendCommand(setupCmds(k));
+        end
         if strlength(strtrim(command)) > 0, sendCommand(command); end
         while state ~= "DONE"
             if toc(start) >= limit
@@ -54,7 +62,11 @@ function output = capturarFlujo(readLine, sendCommand, output, command, options)
                 state = "WAIT_RESULT"; start = tic; limit = 3;
             elseif startsWith(line,"#RESULT ")
                 metadata.result = extractAfter(line,8);
-                if state ~= "WAIT_RESULT" || ~ismember(metadata.result,["parada_detectada","duracion_maxima"])
+                allowedResults = validStepResults;
+                if seenHeader == headerPid
+                    allowedResults = validPidResults;
+                end
+                if state ~= "WAIT_RESULT" || ~ismember(metadata.result,allowedResults)
                     error("frenado:TrialFailed", "Ensayo no valido: %s",metadata.result);
                 end
                 state = "DONE";
@@ -69,6 +81,7 @@ function output = capturarFlujo(readLine, sendCommand, output, command, options)
                         error("frenado:Schema", "Encabezado incompatible.");
                     end
                     headerSeen = true;
+                    seenHeader = line;
                 elseif startsWith(line,"#")
                     error("frenado:Protocol", "Texto de estado dentro del CSV.");
                 else
@@ -94,6 +107,24 @@ function output = capturarFlujo(readLine, sendCommand, output, command, options)
         metadata.error = string(exception.message);
         writeMetadata(metadataPath,metadata);
         rethrow(exception);
+    end
+end
+
+function cleaned = validarSetup(setupCmds)
+    cleaned = strings(0,1);
+    if isempty(setupCmds), return; end
+    permitidos = ["pid","ref","cfg"];
+    for k = 1:numel(setupCmds)
+        cmd = strtrim(setupCmds(k));
+        chars = char(cmd);
+        tokens = split(cmd);
+        if strlength(cmd) == 0 || ~ismember(lower(tokens(1)), permitidos)
+            error("frenado:SetupCommand", "Setup solo admite comandos pid, ref o cfg.");
+        end
+        if any(double(chars) < 32 | double(chars) > 126) || contains(lower(cmd), "x")
+            error("frenado:SetupCommand", "Comando Setup invalido (ASCII imprimible y sin letra x).");
+        end
+        cleaned(end+1,1) = cmd; %#ok<AGROW>
     end
 end
 
