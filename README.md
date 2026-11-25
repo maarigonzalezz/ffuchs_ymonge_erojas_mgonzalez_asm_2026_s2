@@ -143,8 +143,8 @@ t_ms,phase,ctrl_mode,motor_pwm,w_ref,w_meas,w_raw,error,u_brake,p_term,i_term,d_
 ### Paso 2 — Revisar parámetros de `caracterizacion_planta.m`
 
 1. Haz **doble clic** en **`caracterizacion_planta.m`** para abrirlo en el **Editor**.
-2. En el bloque `arguments` (líneas 17–38):
-   * `PulsosPorRev` (`16` por defecto) y `MasaDiscoKg` (`NaN` si aún no se pesa; opcional) están centralizados en un solo lugar.
+2. En el bloque `arguments` (líneas 17–39):
+   * `PulsosPorRev` (`32` por defecto, confirmado en maqueta) y `MasaDiscoKg` (`NaN` si aún no se pesa; opcional) están centralizados en un solo lugar.
    * `UsarDatosEjemplo` (`true` por defecto): usa datos sintéticos de prueba; cámbialo a `false` cuando analices tus CSV reales de `datos/`.
    * Al correr sin `CarpetaResultados` personalizado, actualiza automáticamente `modelo_planta_identificado.mat` en la raíz de `proyecto_2/matlab/`.
 
@@ -197,21 +197,16 @@ ref <r_ref_v2> <w_stop>
 
 ### 6.1 Chequeo rápido en Monitor Serial (115200 baudios)
 
-Antes de capturar CSVs, ejecuta en el Monitor Serial de Arduino IDE:
+Antes de capturar CSVs, verifica el ajuste mecánico (con el disco bien fijado al eje y **`P = 32` pulsos/vuelta** ya confirmado):
 
 ```text
 info
-p
-```
-* Gira el disco **1 vuelta exacta a mano** y anota `#P pulsos=...` (**16** o **32** pulsos/vuelta; este valor es obligatorio para MATLAB). Envía `x` para salir.
-
-```text
 s 35
 s 49
-s 53
+s 52
 x
 ```
-* **Qué debe pasar:** en `35°` no roza el disco; en `49°` apenas hace primer contacto; en `53°` frena firme sin que el servo zumbe ni se trabe. *(Si en `49°` ya aprieta fuerte, bajar `SERVO_CONTACT_DEG` 1–2° en el `.ino`).*
+* **Qué debe pasar:** en `35°` no roza el disco; en `49°` apenas hace primer contacto; en `52°` frena firme sin que el servo zumbe ni se trabe. *(Si incluso en `u = 0.85` el frenado sigue muy parecido al coast-down, acercar un poco más la zapata o recalibrar `SERVO_CONTACT_DEG`/`SERVO_MAX_SAFE_DEG` con `s <deg>`).*
 * **Importante:** **cierra el Monitor Serial de Arduino IDE** antes de correr Python o MATLAB, si no el puerto `COM` queda bloqueado.
 
 ### 6.2 Ubicar el puerto serial
@@ -226,33 +221,33 @@ python captura_serial.py --list
 
 ### 6.3 Recopilar los 3 ensayos `step` para identificar la planta (M1)
 
-Sustituye `COM5` por tu puerto y ejecuta los 3 comandos uno por uno desde `proyecto_2/matlab`. *(Si contaste `16` pulsos/vuelta en el paso 6.1 y no editaste el `.ino`, agrega `--setup "cfg p 16"` antes de `--cmd` en cada línea).*
+Con el disco bien fijado al eje, sustituye `COM5` por tu puerto y ejecuta los 3 comandos uno por uno desde `proyecto_2/matlab` (usando **`PWM = 255`** para mayor velocidad inicial y **`u = 0.50` / `0.85`** para separar bien la acción del freno frente al coast-down):
 
 1. **Coast-down (`u = 0`, freno suelto):**
    ```bash
-   python captura_serial.py --port COM5 --cmd "step 200 0 3000 1000 10000" --out real_coastdown_1.csv
+   python captura_serial.py --port COM5 --cmd "step 255 0 3000 1000 10000" --out real_coastdown_255.csv
    ```
-   *Qué debe pasar:* `0.5 s` en reposo (`35°`) → motor acelera `3 s` → gira estable `1 s` → corta motor y el disco se detiene **solo por fricción** (servo sigue en `35°`) → guarda `.csv` y `.capture.json` en `proyecto_2/matlab/datos/`.
+   *Qué debe pasar:* `0.5 s` en reposo (`35°`) → motor acelera `3 s` a máxima velocidad → gira estable `1 s` → corta motor y el disco se detiene **solo por fricción** (servo sigue en `35°`) → guarda `.csv` y `.capture.json` en `proyecto_2/matlab/datos/`.
 
-2. **Escalón suave (`u = 0.05` — el freno real es muy sensible):**
+2. **Escalón medio (`u = 0.50`, `~50.5°`):**
    ```bash
-   python captura_serial.py --port COM5 --cmd "step 200 0.05 3000 1000 6000" --out real_step_u005_1.csv
+   python captura_serial.py --port COM5 --cmd "step 255 0.50 3000 1000 6000" --out real_step_u050_255.csv
    ```
-   *Qué debe pasar:* acelera igual → corta motor → el servo toca suavemente (`~49.2°`) y detiene el disco claramente más rápido que el coast-down (`~0.8–1.5 s`) → al detenerse, **suelta la zapata de vuelta a `35°`**.
+   *Qué debe pasar:* acelera igual → corta motor → la zapata frena el disco **claramente más rápido** que el coast-down → al detenerse, **suelta la zapata de vuelta a `35°`**.
 
-3. **Escalón medio (`u = 0.20`, validación independiente):**
+3. **Escalón fuerte (`u = 0.85`, `~51.55°`, validación independiente):**
    ```bash
-   python captura_serial.py --port COM5 --cmd "step 200 0.20 3000 1000 6000" --out real_step_u020_1.csv
+   python captura_serial.py --port COM5 --cmd "step 255 0.85 3000 1000 6000" --out real_step_u085_255.csv
    ```
-   *Qué debe pasar:* frena todavía más rápido que `0.05` sin clavar en seco (ideal que tarde al menos `0.5 s` en frenar). Si `0.20` clava muy brusco, usar `0.10` o `0.15`.
+   *Qué debe pasar:* frena todavía más rápido que `u = 0.50` sin trabar/forzar el servo (ideal que tarde al menos `0.4–0.5 s` en frenar). Si `0.85` clava demasiado brusco, probar `u = 0.40` y `u = 0.70`.
 
 **Alternativa en 1 comando desde MATLAB (Extra E1):**
 
 ```matlab
-resumen = identificacion_semiautomatica("COM5", PwmIni=200, UIdent=0.05, UVal=0.20, PulsosPorRev=32, MasaDiscoKg=0.08);
+resumen = identificacion_semiautomatica("COM5");
 ```
 
-Dispara secuencialmente *coast-down* + dos escalones, valida $R^2$ sobre el segundo escalón y calcula automáticamente las ganancias PID y rampas sugeridas. Para probarlo sin hardware:
+Dispara secuencialmente *coast-down* + dos escalones (`PWM=255`, `u=0.50`, `u=0.85`, `PulsosPorRev=32`), valida $R^2$ sobre el segundo escalón y calcula automáticamente las ganancias PID y rampas sugeridas. Para probarlo sin hardware:
 
 ```matlab
 resumen = identificacion_semiautomatica("", ModoEjemplo=true);
@@ -264,28 +259,29 @@ resumen = identificacion_semiautomatica("", ModoEjemplo=true);
 
 * **Desde terminal (Python):**
   ```bash
-  python captura_serial.py --port COM5 --setup "pid 0.006 0.02 0 0.05" --setup "ref 35 5" --cmd "runpid 200 3000 1000 8000" --out real_pid_1.csv
+  python captura_serial.py --port COM5 --setup "pid 0.006 0.02 0 0.05" --setup "ref 55 5" --cmd "runpid 255 3000 1000 8000" --out real_pid_255.csv
   ```
 * **Desde MATLAB (`captura_serial_esp32.m`):**
   ```matlab
   PUERTO = "COM5"; % En macOS: "/dev/cu.usbserial-0001"
 
-  captura_serial_esp32(PUERTO, "step 200 0 3000 1000 10000", "real_coastdown_1.csv")
-  captura_serial_esp32(PUERTO, "step 200 0.05 3000 1000 6000", "real_step_u005_1.csv")
-  captura_serial_esp32(PUERTO, "runpid 200 3000 1000 8000", "real_pid_1.csv", ...
-      Setup=["pid 0.006 0.02 0 0.05", "ref 35 5"])
+  captura_serial_esp32(PUERTO, "step 255 0 3000 1000 10000", "real_coastdown_255.csv")
+  captura_serial_esp32(PUERTO, "step 255 0.50 3000 1000 6000", "real_step_u050_255.csv")
+  captura_serial_esp32(PUERTO, "step 255 0.85 3000 1000 6000", "real_step_u085_255.csv")
+  captura_serial_esp32(PUERTO, "runpid 255 3000 1000 8000", "real_pid_255.csv", ...
+      Setup=["pid 0.006 0.02 0 0.05", "ref 55 5"])
   ```
-* **Qué debe pasar físicamente:** acelera `3 s` → `1 s` estable → corta motor → el servo **modula progresivamente** entre `49°` y `~50°` siguiendo la rampa sin golpes → al bajar a `5 rad/s` suelta la zapata a `35°` y cierra con `w_final_alcanzada`.
+* **Qué debe pasar físicamente:** acelera `3 s` → `1 s` estable → corta motor → el servo **modula progresivamente** entre `49°` y `52°` siguiendo la rampa → al bajar a `5 rad/s` suelta la zapata a `35°` y cierra con `w_final_alcanzada`.
 
 ### 6.5 Analizar los datos reales en MATLAB
 
-Con los 3 CSV reales en `proyecto_2/matlab/datos/`, ejecuta en MATLAB (reemplazando `PulsosPorRev` y los nombres si cambiaste `u`):
+Con los 3 CSV reales en `proyecto_2/matlab/datos/`, ejecuta en MATLAB (usa `RetardoCorteSeg=0.18` si persiste una meseta inicial de corte en el coast-down):
 
 ```matlab
-caracterizacion_planta(UsarDatosEjemplo=false, PulsosPorRev=32, MasaDiscoKg=0.08, ...
-    ArchivoCoastdown="real_coastdown_1.csv", ...
-    ArchivoIdentificacion="real_step_u005_1.csv", ...
-    ArchivoValidacion="real_step_u020_1.csv")
+caracterizacion_planta(UsarDatosEjemplo=false, PulsosPorRev=32, ...
+    ArchivoCoastdown="real_coastdown_255.csv", ...
+    ArchivoIdentificacion="real_step_u050_255.csv", ...
+    ArchivoValidacion="real_step_u085_255.csv")
 diseno_pid()
 ```
 

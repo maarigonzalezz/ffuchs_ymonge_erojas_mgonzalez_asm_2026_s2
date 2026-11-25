@@ -16,7 +16,7 @@ function modelo = caracterizacion_planta(opciones)
 % ========================================================================
 arguments
     % --- Parametros fisicos centralizados (UN SOLO LUGAR) ---
-    opciones.PulsosPorRev (1,1) double {mustBeInteger,mustBePositive} = 16
+    opciones.PulsosPorRev (1,1) double {mustBeInteger,mustBePositive} = 32
     opciones.MasaDiscoKg (1,1) double = NaN       % kg (NaN si aun no se ha pesado)
     opciones.DiametroDiscoM (1,1) double {mustBePositive,mustBeFinite} = 0.130
     opciones.TsNominal (1,1) double {mustBePositive,mustBeFinite} = 0.020
@@ -35,6 +35,7 @@ arguments
     opciones.OmegaMinValida (1,1) double {mustBeFinite,mustBeNonnegative} = 4
     opciones.ExigirCapturaCompleta (1,1) logical = true
     opciones.MaxDelay (1,1) double {mustBeFinite,mustBePositive} = 0.5
+    opciones.RetardoCorteSeg (1,1) double {mustBeFinite,mustBeNonnegative} = 0
 end
 
 if isempty(which("tf")) || ~license("test", "Control_Toolbox")
@@ -113,6 +114,14 @@ requireMetadata = opciones.ExigirCapturaCompleta && ~USAR_DATOS_EJEMPLO;
 coast  = frenado.cargarEnsayoCSV(archivoCoastdown,  USAR_SENAL_FILTRADA, OMEGA_MIN_VALIDA, 8, requireMetadata);
 idRun  = frenado.cargarEnsayoCSV(archivoEscalonId,  USAR_SENAL_FILTRADA, OMEGA_MIN_VALIDA, 8, requireMetadata);
 valRun = frenado.cargarEnsayoCSV(archivoEscalonVal, USAR_SENAL_FILTRADA, OMEGA_MIN_VALIDA, 8, requireMetadata);
+
+if opciones.RetardoCorteSeg > 0
+    coast  = recortarRetardoCorte(coast,  opciones.RetardoCorteSeg);
+    idRun  = recortarRetardoCorte(idRun,  opciones.RetardoCorteSeg);
+    valRun = recortarRetardoCorte(valRun, opciones.RetardoCorteSeg);
+    fprintf("Alineacion de corte aplicada: RetardoCorteSeg = %.3f s (tramo inicial recortado en los 3 ensayos)\n", ...
+            opciones.RetardoCorteSeg);
+end
 
 fprintf("=== RESUMEN DE ENSAYOS CARGADOS ===\n");
 fprintf("Coast-down   : w0 = %.2f rad/s (%.1f RPM), u0 = %.2f, Ts_prom = %.1f ms, t_valido = %.2f s\n", ...
@@ -408,6 +417,7 @@ modelo.archivos_fuente = [archivoCoastdown, archivoEscalonId, archivoEscalonVal]
 modelo.fecha_analisis = char(datetime("now", "Format", "yyyy-MM-dd HH:mm:ss"));
 modelo.senal_filtrada = USAR_SENAL_FILTRADA;
 modelo.retardo_incluye_medicion = true;
+modelo.retardo_corte_s = opciones.RetardoCorteSeg;
 modelo.calidad_muestreo = struct("coast", coast.Ts_prom, "id", idRun.Ts_prom, ...
     "val", valRun.Ts_prom, "jitter_max", max([coast.jitter_max_s, idRun.jitter_max_s, valRun.jitter_max_s]));
 modelo.ajuste = parametros;
@@ -423,6 +433,18 @@ if actualizarRaiz
 end
 
 end % caracterizacion_planta
+
+function run = recortarRetardoCorte(run, tCut)
+    idx = run.t_val >= tCut;
+    if sum(idx) < 8
+        error("frenado:ShortBrake", ...
+              "RetardoCorteSeg (%.3f s) deja menos de 8 muestras validas en %s.", tCut, run.archivo);
+    end
+    tNew = run.t_val(idx);
+    run.t_val = tNew - tNew(1);
+    run.w_val = run.w_val(idx);
+    run.w0 = run.w_val(1);
+end
 
 function [rmse, r2] = calcularMetricas(yReal, yPred)
     err = yReal(:) - yPred(:);

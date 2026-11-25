@@ -13,7 +13,8 @@ function resumen = identificacion_semiautomatica(puerto, opciones)
 %
 %  Ejemplos de uso:
 %    % En vivo con ESP32 conectada (Windows / macOS):
-%    resumen = identificacion_semiautomatica("COM5", PwmIni=190, UIdent=0.4, UVal=0.7);
+%    resumen = identificacion_semiautomatica("COM5");
+%    resumen = identificacion_semiautomatica("COM5", PwmIni=255, UIdent=0.50, UVal=0.85);
 %    resumen = identificacion_semiautomatica("/dev/cu.usbserial-0001");
 %
 %    % Demostracion offline con datos sinteticos (sin hardware conectado):
@@ -22,17 +23,17 @@ function resumen = identificacion_semiautomatica(puerto, opciones)
 arguments
     puerto (1,1) string = ""
     % --- Parametros de adquisicion ---
-    opciones.PwmIni (1,1) double {mustBeInteger,mustBeGreaterThanOrEqual(opciones.PwmIni,1),mustBeLessThanOrEqual(opciones.PwmIni,255)} = 190
-    opciones.UIdent (1,1) double {mustBeGreaterThan(opciones.UIdent,0),mustBeLessThanOrEqual(opciones.UIdent,1)} = 0.40
-    opciones.UVal (1,1) double {mustBeGreaterThan(opciones.UVal,0),mustBeLessThanOrEqual(opciones.UVal,1)} = 0.70
+    opciones.PwmIni (1,1) double {mustBeInteger,mustBeGreaterThanOrEqual(opciones.PwmIni,1),mustBeLessThanOrEqual(opciones.PwmIni,255)} = 255
+    opciones.UIdent (1,1) double {mustBeGreaterThan(opciones.UIdent,0),mustBeLessThanOrEqual(opciones.UIdent,1)} = 0.50
+    opciones.UVal (1,1) double {mustBeGreaterThan(opciones.UVal,0),mustBeLessThanOrEqual(opciones.UVal,1)} = 0.85
     opciones.SpinupMs (1,1) double {mustBeInteger,mustBeGreaterThanOrEqual(opciones.SpinupMs,20),mustBeLessThanOrEqual(opciones.SpinupMs,600000)} = 3000
-    opciones.PreMs (1,1) double {mustBeInteger,mustBeGreaterThanOrEqual(opciones.PreMs,0),mustBeLessThanOrEqual(opciones.PreMs,600000)} = 400
+    opciones.PreMs (1,1) double {mustBeInteger,mustBeGreaterThanOrEqual(opciones.PreMs,0),mustBeLessThanOrEqual(opciones.PreMs,600000)} = 1000
     opciones.DurMs (1,1) double {mustBeInteger,mustBeGreaterThanOrEqual(opciones.DurMs,20),mustBeLessThanOrEqual(opciones.DurMs,600000)} = 6000
     opciones.BaudRate (1,1) double {mustBeInteger,mustBePositive} = 115200
     opciones.TimeoutSeg (1,1) double {mustBeFinite,mustBePositive} = 20
     opciones.PausaEntreEnsayosSeg (1,1) double {mustBeFinite,mustBeNonnegative} = 1.5
     % --- Parametros fisicos centralizados ---
-    opciones.PulsosPorRev (1,1) double {mustBeInteger,mustBePositive} = 16
+    opciones.PulsosPorRev (1,1) double {mustBeInteger,mustBePositive} = 32
     opciones.MasaDiscoKg (1,1) double = NaN
     opciones.TsNominal (1,1) double {mustBePositive,mustBeFinite} = 0.020
     opciones.UsarSenalFiltrada (1,1) logical = false
