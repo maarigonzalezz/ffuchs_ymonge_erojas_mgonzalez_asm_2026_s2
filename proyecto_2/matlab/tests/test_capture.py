@@ -80,6 +80,10 @@ class CaptureTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             capture.capture(Serial([],Clock()),self.path)
         self.assertEqual(self.path.read_text(), 'original')
+        clock = Clock()
+        capture.capture(Serial(transcript(), clock), self.path, 'step 150 .4 20 20 1000',
+                        timeout=.05, clock=clock, overwrite=True)
+        self.assertEqual(capture.validate_csv(self.path), 3)
     def test_binary_or_oversized_lines(self):
         for line in [b'\xff\n', b'bad\x00data\n', b'A'*513+b'\n']:
             with tempfile.TemporaryDirectory() as folder:

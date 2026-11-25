@@ -286,14 +286,17 @@ class CaptureProtocol:
             raise CaptureError("Datos inesperados despues de END_CSV.")
 
 
-def capture(ser, destination, command="", timeout=20.0, clock=time.monotonic, setup=()):
+def capture(ser, destination, command="", timeout=20.0, clock=time.monotonic, setup=(), overwrite=False):
     """Captura un puerto ya abierto; conserva parcial y metadatos ante cualquier salida."""
     destination = Path(destination)
     partial = destination.with_suffix(".partial.csv")
     metadata_path = destination.with_suffix(".capture.json")
     for path in (destination, partial, metadata_path):
         if path.exists():
-            raise FileExistsError(f"No se sobrescribe: {path}")
+            if overwrite:
+                path.unlink()
+            else:
+                raise FileExistsError(f"No se sobrescribe: {path} (use -f / --overwrite para reemplazar)")
     wait_timeout, data_timeout = capture_timeouts(command, timeout)
     setup = check_setup(setup)
     if is_pid_command(command):
@@ -371,6 +374,8 @@ def main():
     parser.add_argument("--setup", action="append", default=[],
                         help='comando previo (pid, ref o cfg); se puede repetir, p. ej. --setup "pid 0.02 0 0 0.05"')
     parser.add_argument("--out", default="")
+    parser.add_argument("-f", "--overwrite", action="store_true",
+                        help="sobrescribe el CSV y metadatos si el archivo de salida ya existe")
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
@@ -390,7 +395,7 @@ def main():
     with serial.Serial(args.port, args.baud, timeout=.2) as ser:
         time.sleep(1.8)
         ser.reset_input_buffer()
-        result = capture(ser, destination, args.cmd, args.timeout, setup=args.setup)
+        result = capture(ser, destination, args.cmd, args.timeout, setup=args.setup, overwrite=args.overwrite)
     print(f"Captura verificada: {result}")
 
 

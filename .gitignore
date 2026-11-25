@@ -1,9 +1,51 @@
+# Carpetas locales de trabajo y notas
 contexto/
 Claude outputs/
+proyecto_2/FILE_TREE.md
+
+# IDEs, editores y sistema operativo
 .vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# Python cache y entornos virtuales
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# MATLAB temporales, autosave y salidas con timestamp
+*.asv
+*.m~
+*.autosave
+matlab_crash_dump.*
+proyecto_2/matlab/resultados/
+proyecto_2/matlab/datos_sinteticos/
+proyecto_2/matlab/datos/local_tmp/
+*.partial.csv
+
+# Arduino / ESP32 compilacion temporal
+build/
+*.bin
+*.elf
+
+# LaTeX auxiliares
 *.aux
 *.log
 *.out
 *.bbl
 *.blg
 *.synctex.gz
+*.fdb_latexmk
+*.fls
+*.toc
+*.lof
+*.lot
