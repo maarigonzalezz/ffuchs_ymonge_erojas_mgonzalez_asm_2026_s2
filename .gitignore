@@ -1,1 +1,9 @@
 contexto/
+Claude outputs/
+.vscode/
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.synctex.gz
