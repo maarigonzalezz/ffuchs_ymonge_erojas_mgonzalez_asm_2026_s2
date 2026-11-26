@@ -1,7 +1,7 @@
 {
-  "nota": "Parametros de rampa de referencia (rad/s) generados por diseno_pid.m.",
+  "nota": "Parametros de rampa de referencia (rad/s) generados por disenar_pid.m.",
   "formula": "w_ref(t) = max(w_stop, w0 - r_ref * max(0, t))",
-  "cmd_pid": "pid 0.00096 0.00001 0.00004 0.0600",
+  "cmd_pid": "pid 0.03540 0.01275 0.00132 0.0600",
   "cmd_ref_v1": "ref 34.778 5.00",
   "cmd_ref_v2": "ref 34.778 5.00",
   "v1": {
