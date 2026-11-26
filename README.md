@@ -26,7 +26,12 @@ proyecto_2/
     │   ├── evaluarDeltaW.m                   # Respuesta incremental local al escalón con retardo L
     │   ├── respuestaEscalon.m                # Evaluación de step(u*Gp) preservando jitter temporal real
     │   └── referenciaRampa.m                 # Fórmula única w_ref(t) = max(w_stop, w0 - r_ref*max(0,t))
-    ├── caracterizacion_planta.m              # M1 (Etapa 3): identifica Gp,L(s), valida e impulse(Gp)
+    ├── caracterizacion_parametros/           # Módulo autocontenido de caracterización (N repeticiones)
+    │   ├── caracterizacion.py                # CLI: `python -B caracterizacion.py 3` (captura + promedia + MATLAB)
+    │   ├── caracterizar_planta.m             # Motor M1 con promediado de ensamble y validación multi-rep
+    │   ├── csv/                              # Última corrida de caracterización (se reemplaza en cada ejecución)
+    │   └── graficas/                         # Últimas 4 gráficas PNG a 300 dpi (se reemplazan en cada ejecución)
+    ├── caracterizacion_planta.m              # Wrapper retrocompatible hacia caracterizacion_parametros/
     ├── diseno_pid.m                          # M2 (Etapa 4): c2d(ZOH), plano Z, rampas y simulación PID
     ├── identificacion_semiautomatica.m       # E1 (+2 pts): captura 3 ensayos + ajusta + sugiere PID
     ├── evaluacion_experimentos.m             # Evaluación de ajuste P/PI/PID y finales V1/V2 (figuras + .tex)
@@ -49,8 +54,9 @@ proyecto_2/
     ├── figuras/                              # Figuras base de referencia
     ├── docs/                                 # Capturas de guía y CONTEXTO_EVALUACION_MARIANA.md
     └── tests/
-        ├── test_frenado.m                    # Suite unitaria y de integración en MATLAB (28 tests)
+        ├── test_frenado.m                    # Suite unitaria y de integración en MATLAB (29 tests)
         ├── test_capture.py                   # Suite de protocolo serial en Python (31 tests + fuzz)
+        ├── test_caracterizacion.py           # Suite del módulo caracterizacion_parametros (3 tests)
         └── validation_summary.json           # Resumen verificado y hashes SHA-256
 ```
 
