@@ -30,6 +30,7 @@ matlab_crash_dump.*
 proyecto_2/matlab/resultados/
 proyecto_2/matlab/datos_sinteticos/
 proyecto_2/matlab/datos/local_tmp/
+proyecto_2/matlab/caracterizacion_parametros/_staging_csv/
 *.partial.csv
 
 # Arduino / ESP32 compilacion temporal

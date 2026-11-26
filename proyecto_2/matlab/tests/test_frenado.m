@@ -334,6 +334,44 @@ function testM1ModelContractAndValidation(test)
     end
 end
 
+function testCaracterizacionPromediadoEnsamble(test)
+    assumeTrue(test,~isempty(which("tf")),"Control System Toolbox no esta instalado.");
+    folder = fullfile(test.TestData.temp, "ensamble_csv");
+    outDir = fullfile(test.TestData.temp, "ensamble_out");
+    figDir = fullfile(outDir, "graficas");
+    mkdir(folder); mkdir(figDir);
+
+    % Crea un PNG viejo para comprobar que LimpiarFigurasPrevias lo elimina
+    dummyPng = fullfile(figDir, "vieja.png");
+    fid = fopen(dummyPng, "w"); fwrite(fid, uint8(0)); fclose(fid);
+
+    cNames = strings(1,3); idNames = strings(1,3); vNames = strings(1,3);
+    for r = 1:3
+        cNames(r)  = sprintf("coastdown_rep%d.csv", r);
+        idNames(r) = sprintf("step_u050_rep%d.csv", r);
+        vNames(r)  = sprintf("step_u085_rep%d.csv", r);
+        writetable(analyticTrial(0.10, 17.0, 35.0, 0.20, 0.00), fullfile(folder, cNames(r)));
+        writetable(analyticTrial(0.10, 17.0, 35.0, 0.20, 0.50), fullfile(folder, idNames(r)));
+        writetable(analyticTrial(0.10, 17.0, 35.0, 0.20, 0.85), fullfile(folder, vNames(r)));
+    end
+
+    m = caracterizacion_planta( ...
+        UsarDatosEjemplo=true, CarpetaDatos=folder, ...
+        ArchivoCoastdown=cNames, ArchivoIdentificacion=idNames, ArchivoValidacion=vNames, ...
+        CarpetaSalidaFija=outDir, CarpetaFigurasFija=figDir, LimpiarFigurasPrevias=true, ...
+        ActualizarModeloRaiz=false, MostrarFiguras=false, GuardarFiguras=true);
+
+    verifyEqual(test, m.n_repeticiones.coast, 3);
+    verifyEqual(test, m.n_repeticiones.id, 3);
+    verifyEqual(test, m.n_repeticiones.val, 3);
+    verifyEqual(test, numel(m.validacion_repeticiones), 3);
+    verifyGreaterThan(test, m.r2_val, 0.99);
+    verifyEqual(test, m.Kb_J, 35.0, "RelTol", 0.03);
+    verifyEqual(test, m.L, 0.20, "AbsTol", 0.015);
+    verifyFalse(test, isfile(dummyPng));
+    verifyEqual(test, numel(dir(fullfile(figDir, "*.png"))), 4);
+end
+
 function testM2DisenoPidEstabilidadYComandos(test)
     assumeTrue(test,~isempty(which("tf")),"Control System Toolbox no esta instalado.");
     modeloPrueba=struct("a",0.2778,"c0",3.5013,"Kb_J",21.7864,"L",0.0707, ...
