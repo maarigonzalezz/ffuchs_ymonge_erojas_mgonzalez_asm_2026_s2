@@ -309,7 +309,6 @@ function wStop = resolverWStopDefault(wStopOpt, moduloDir, matlabDir)
     end
     candidatos = [ ...
         fullfile(matlabDir, "diseno-controlador-digital", "condiciones_diseno.json"), ...
-        fullfile(matlabDir, "condiciones_diseno.json"), ...
         fullfile(moduloDir, "condiciones_diseno.json")];
     for k = 1:numel(candidatos)
         if isfile(candidatos(k))
@@ -511,14 +510,9 @@ function lap = analizarLaplaceGanador(row, rutaModeloOpt, matlabDir)
     if strlength(strtrim(rutaModeloOpt)) > 0 && isfile(rutaModeloOpt)
         rutaModelo = rutaModeloOpt;
     else
-        candidatos = [ ...
-            fullfile(matlabDir, "caracterizacion_parametros", "modelo_planta_identificado.mat"), ...
-            fullfile(matlabDir, "modelo_planta_identificado.mat")];
-        for i = 1:numel(candidatos)
-            if isfile(candidatos(i))
-                rutaModelo = candidatos(i);
-                break;
-            end
+        rutaDef = fullfile(matlabDir, "caracterizacion_parametros", "modelo_planta_identificado.mat");
+        if isfile(rutaDef)
+            rutaModelo = rutaDef;
         end
     end
     if rutaModelo == ""

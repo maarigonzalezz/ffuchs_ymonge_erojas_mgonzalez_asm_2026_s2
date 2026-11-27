@@ -22,7 +22,7 @@ arguments
     opciones.DiametroDiscoM (1,1) double {mustBePositive,mustBeFinite} = 0.130
     opciones.TsNominal (1,1) double {mustBePositive,mustBeFinite} = 0.020
     % --- Seleccion de datos y archivos (acepta 1 archivo o vector de N repeticiones) ---
-    opciones.UsarDatosEjemplo (1,1) logical = true
+    opciones.UsarDatosEjemplo (1,1) logical = false
     opciones.CarpetaDatos (1,1) string = ""
     opciones.ArchivoCoastdown (1,:) string = "coastdown_1.csv"
     opciones.ArchivoIdentificacion (1,:) string = "step_u04_1.csv"
@@ -31,8 +31,8 @@ arguments
     opciones.CarpetaResultados (1,1) string = ""
     opciones.CarpetaSalidaFija (1,1) string = ""
     opciones.CarpetaFigurasFija (1,1) string = ""
-    opciones.LimpiarFigurasPrevias (1,1) logical = false
-    opciones.ActualizarModeloRaiz logical {mustBeScalarOrEmpty} = logical.empty
+    opciones.LimpiarFigurasPrevias (1,1) logical = true
+    opciones.ActualizarModeloRaiz (1,1) logical = false
     opciones.GuardarFiguras (1,1) logical = true
     opciones.MostrarFiguras (1,1) logical = true
     opciones.UsarSenalFiltrada (1,1) logical = false
@@ -72,48 +72,30 @@ USAR_SENAL_FILTRADA = opciones.UsarSenalFiltrada;
 
 carpetaDatos = opciones.CarpetaDatos;
 if strlength(carpetaDatos) == 0
-    if USAR_DATOS_EJEMPLO
-        carpetaEj = fullfile(rutaBase, "datos_ejemplo");
-        if isfile(fullfile(carpetaEj, opciones.ArchivoCoastdown(1)))
-            carpetaDatos = carpetaEj;
-        else
-            carpetaDatos = fullfile(rutaBase, "datos_sinteticos");
-            if ~isfolder(carpetaDatos), generar_datos_ejemplo(carpetaDatos); end
-        end
-    else
-        carpetaDatos = fullfile(rutaBase, "datos");
-    end
+    carpetaDatos = fullfile(rutaModulo, "csv");
 end
 fprintf("Datos: %s (sinteticos=%d)\n", carpetaDatos, USAR_DATOS_EJEMPLO);
 
-modo = "experimentales";
 etiqueta = "DATOS EXPERIMENTALES";
 if USAR_DATOS_EJEMPLO
-    modo = "sinteticos";
     etiqueta = "DATOS SINTETICOS - NO SON MEDICIONES";
 end
 
 if strlength(opciones.CarpetaSalidaFija) > 0
     carpetaResultados = opciones.CarpetaSalidaFija;
+elseif strlength(opciones.CarpetaResultados) > 0
+    carpetaResultados = opciones.CarpetaResultados;
 else
-    carpetaResultados = fullfile(rutaBase, "resultados", modo);
-    if strlength(opciones.CarpetaResultados) > 0
-        carpetaResultados = fullfile(opciones.CarpetaResultados, modo);
-    end
-    carpetaResultados = fullfile(carpetaResultados, string(datetime("now", "Format", "yyyyMMdd_HHmmss_SSS")));
+    carpetaResultados = rutaModulo;
 end
 
 if strlength(opciones.CarpetaFigurasFija) > 0
     carpetaFiguras = opciones.CarpetaFigurasFija;
 else
-    carpetaFiguras = fullfile(carpetaResultados, "figuras");
+    carpetaFiguras = fullfile(carpetaResultados, "graficas");
 end
 
-if isempty(opciones.ActualizarModeloRaiz)
-    actualizarRaiz = (strlength(opciones.CarpetaResultados) == 0);
-else
-    actualizarRaiz = opciones.ActualizarModeloRaiz;
-end
+actualizarRaiz = opciones.ActualizarModeloRaiz;
 
 visibilidad = "on";
 if ~opciones.MostrarFiguras, visibilidad = "off"; end
