@@ -1,0 +1,11 @@
+{
+  "command": "runpid 255 3000 1000 8000",
+  "setup": [
+    "pid 0.04500 0.06000 0.00040 0.1000",
+    "ref 34.778 5.00"
+  ],
+  "status": "complete",
+  "result": "w_final_alcanzada",
+  "warnings": [],
+  "rows": 107
+}

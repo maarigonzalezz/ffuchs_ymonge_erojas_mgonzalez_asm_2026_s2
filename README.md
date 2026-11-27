@@ -32,7 +32,16 @@ proyecto_2/
     │   ├── csv/                              # Última corrida de caracterización (se reemplaza en cada ejecución)
     │   └── graficas/                         # Últimas 4 gráficas PNG a 300 dpi (se reemplazan en cada ejecución)
     ├── caracterizacion_planta.m              # Wrapper retrocompatible hacia caracterizacion_parametros/
-    ├── diseno_pid.m                          # M2 (Etapa 4): c2d(ZOH), plano Z, rampas y simulación PID
+    ├── diseno-controlador-digital/           # Módulo autocontenido de diseño PID (Etapa 4 — Laplace s y Z)
+    │   ├── diseno.py                         # CLI: `python -B diseno.py` (corre MATLAB y sobrescribe graficas/)
+    │   ├── disenar_pid.m                     # Motor M2: SIMC, Laplace s (ROC/Bode), Z exacto, rampas y sim.
+    │   └── graficas/                         # Últimas 4 gráficas PNG a 300 dpi (se reemplazan en cada ejecución)
+    ├── diseno_pid.m                          # Wrapper retrocompatible hacia diseno-controlador-digital/
+    ├── ajuste-controlador/                   # Módulo autocontenido de ajuste experimental P/PI/PID (Etapa 5)
+    │   ├── ajuste.py                         # CLI: `python -B ajuste.py 3` (captura N reps + promedia + MATLAB)
+    │   ├── analizar_ajuste.m                 # Métricas (RMSE, IAE, TV_u, Sat, AW, t_f), ensamble y 4 gráficas
+    │   ├── csv/                              # Corridas runpid y registro_pruebas.json con ganancias usadas
+    │   └── graficas/                         # Últimas 4 gráficas PNG a 300 dpi (incl. panel de métricas)
     ├── identificacion_semiautomatica.m       # E1 (+2 pts): captura 3 ensayos + ajusta + sugiere PID
     ├── evaluacion_experimentos.m             # Evaluación de ajuste P/PI/PID y finales V1/V2 (figuras + .tex)
     ├── evaluacion_extras.m                   # Evaluación de extras E2 (polos/margen Z), E3, E4 y E5

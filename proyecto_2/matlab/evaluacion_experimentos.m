@@ -156,10 +156,10 @@ function ensayo = leerEnsayo(ruta,velocidad,control,referencias)
         captura = jsondecode(fileread(meta));
         if ~isfield(captura,"status") || string(captura.status) ~= "complete" || ...
                 ~isfield(captura,"rows") || ~isscalar(captura.rows) || captura.rows ~= height(T) || ...
-                ~isfield(captura,"result") || ~ismember(string(captura.result),["parada_detectada","duracion_maxima"])
+                ~isfield(captura,"result") || ~ismember(string(captura.result),["parada_detectada","duracion_maxima","w_final_alcanzada"])
             error("evaluacion:CapturaIncompleta","Captura incompleta: %s.",ruta);
         end
-        paradaConfirmada = string(captura.result) == "parada_detectada";
+        paradaConfirmada = ismember(string(captura.result),["parada_detectada","w_final_alcanzada"]);
         if isfield(captura,"command"), frenado.validarComandoTabla(T,string(captura.command)); end
     end
     if esRunpid
