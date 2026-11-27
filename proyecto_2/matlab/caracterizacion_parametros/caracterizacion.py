@@ -25,10 +25,10 @@ import time
 
 MODULO_DIR = Path(__file__).resolve().parent
 MATLAB_DIR = MODULO_DIR.parent
+DISENO_DIR = MATLAB_DIR / "diseno-controlador-digital"
 CAPTURA_SCRIPT = MATLAB_DIR / "captura_serial.py"
 CSV_DIR = MODULO_DIR / "csv"
 GRAFICAS_DIR = MODULO_DIR / "graficas"
-STAGING_DIR = MODULO_DIR / "_staging_csv"
 
 
 def _fmt_u_tag(u: float) -> str:
@@ -92,19 +92,17 @@ def _capturar_trios(args: argparse.Namespace) -> tuple[list[Path], list[Path], l
         dur_step_ms=args.dur_step,
     )
 
-    if STAGING_DIR.exists():
-        shutil.rmtree(STAGING_DIR)
-    STAGING_DIR.mkdir(parents=True, exist_ok=True)
-
     total = len(plan)
     print("========================================================================")
     print(f"  CARACTERIZACION AUTOMATIZADA: N = {args.n} trios ({total} corridas) en {args.port}")
     print(f"  PWM={args.pwm} | u_coast=0.00 | u_id={args.u_id:.2f} | u_val={args.u_val:.2f}")
     print("========================================================================")
 
-    try:
+    # Staging temporal fuera de OneDrive para evitar bloqueos WinError 5
+    with tempfile.TemporaryDirectory(prefix="caract_staging_") as tmp_dir:
+        staging_dir = Path(tmp_dir)
         for idx, (etiqueta, nombre_csv, comando) in enumerate(plan, start=1):
-            destino = STAGING_DIR / nombre_csv
+            destino = staging_dir / nombre_csv
             print(f"\n[{idx}/{total}] {etiqueta}")
             print(f"  CMD: {comando}")
             cmd_py = [
@@ -124,16 +122,12 @@ def _capturar_trios(args: argparse.Namespace) -> tuple[list[Path], list[Path], l
             if idx < total and args.pausa > 0:
                 print(f"  Pausa de estabilizacion ({args.pausa:.1f} s)...")
                 time.sleep(args.pausa)
-    except BaseException:
-        shutil.rmtree(STAGING_DIR, ignore_errors=True)
-        raise
 
-    # Reemplazo atomico y limpio de csv/ solo cuando las 3*N capturas tuvieron exito
-    _limpiar_directorio(CSV_DIR, ("*.csv", "*.capture.json"))
-    for archivo in sorted(STAGING_DIR.iterdir()):
-        if archivo.is_file():
-            shutil.move(str(archivo), str(CSV_DIR / archivo.name))
-    shutil.rmtree(STAGING_DIR, ignore_errors=True)
+        # Reemplazo atomico y limpio de csv/ solo cuando las 3*N capturas tuvieron exito
+        _limpiar_directorio(CSV_DIR, ("*.csv", "*.capture.json"))
+        for archivo in sorted(staging_dir.iterdir()):
+            if archivo.is_file():
+                shutil.copy2(str(archivo), str(CSV_DIR / archivo.name))
     print(f"\nCSV anteriores reemplazados limpiamente en:\n  {CSV_DIR}")
 
     return _detectar_trios_en_csv(args.u_id, args.u_val)
@@ -197,7 +191,7 @@ def _ejecutar_matlab(
         f'    CarpetaSalidaFija="{MODULO_DIR.as_posix()}", ...',
         f'    CarpetaFigurasFija="{GRAFICAS_DIR.as_posix()}", ...',
         "    LimpiarFigurasPrevias=true, ...",
-        "    ActualizarModeloRaiz=true, ...",
+        "    ActualizarModeloRaiz=false, ...",
         "    UsarSenalFiltrada=true, ...",
         f"    PulsosPorRev={args.pulsos}, ...",
         f"    MasaDiscoKg={masa_expr}, ...",
@@ -207,13 +201,17 @@ def _ejecutar_matlab(
 
     if not args.sin_pid:
         lines.extend([
-            "d = diseno_pid( ...",
+            f'addpath("{DISENO_DIR.as_posix()}");',
+            "d = disenar_pid( ...",
             "    Modelo=m, ...",
             f"    W0Baja={args.w0_baja:.4f}, ...",
             f"    W0Alta={args.w0_alta:.4f}, ...",
             f"    WStop={args.w_stop:.4f}, ...",
-            "    ActualizarRaiz=true, ...",
-            "    GuardarFiguras=false, ...",
+            f'    CarpetaSalidaFija="{DISENO_DIR.as_posix()}", ...',
+            f'    CarpetaFigurasFija="{(DISENO_DIR / "graficas").as_posix()}", ...',
+            "    LimpiarFigurasPrevias=true, ...",
+            "    ActualizarRaiz=false, ...",
+            "    GuardarFiguras=true, ...",
             "    MostrarFiguras=false);",
         ])
 

@@ -26,7 +26,6 @@ MODULO_DIR = Path(__file__).resolve().parent
 MATLAB_DIR = MODULO_DIR.parent
 GRAFICAS_DIR = MODULO_DIR / "graficas"
 MODELO_CARACT = MATLAB_DIR / "caracterizacion_parametros" / "modelo_planta_identificado.mat"
-MODELO_RAIZ = MATLAB_DIR / "modelo_planta_identificado.mat"
 
 
 def _resolver_modelo(ruta_usuario: str) -> Path:
@@ -37,10 +36,8 @@ def _resolver_modelo(ruta_usuario: str) -> Path:
         return p
     if MODELO_CARACT.is_file():
         return MODELO_CARACT
-    if MODELO_RAIZ.is_file():
-        return MODELO_RAIZ
     raise FileNotFoundError(
-        "No se encontro modelo_planta_identificado.mat. "
+        "No se encontro modelo_planta_identificado.mat en caracterizacion_parametros/. "
         "Ejecuta primero caracterizacion_parametros/caracterizacion.py."
     )
 
@@ -103,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         f'    CarpetaSalidaFija="{MODULO_DIR.as_posix()}", ...',
         f'    CarpetaFigurasFija="{GRAFICAS_DIR.as_posix()}", ...',
         "    LimpiarFigurasPrevias=true, ...",
-        "    ActualizarRaiz=true, ...",
+        "    ActualizarRaiz=false, ...",
         "    GuardarFiguras=true, ...",
         "    MostrarFiguras=false);",
     ]

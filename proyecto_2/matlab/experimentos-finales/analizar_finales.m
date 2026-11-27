@@ -266,20 +266,15 @@ function [rRef, wStop] = resolverRefDefaults(rOpt, wOpt, reg, matlabDir)
         if ~isfinite(wStop) && isfield(reg, "w_stop"), wStop = double(reg.w_stop); end
     end
     if ~isfinite(rRef) || ~isfinite(wStop)
-        candidatos = [ ...
-            fullfile(matlabDir, "diseno-controlador-digital", "condiciones_diseno.json"), ...
-            fullfile(matlabDir, "condiciones_diseno.json")];
-        for i = 1:numel(candidatos)
-            if isfile(candidatos(i))
-                try
-                    j = jsondecode(fileread(candidatos(i)));
-                    if isfield(j, "v1")
-                        if ~isfinite(rRef) && isfield(j.v1, "r_ref"), rRef = double(j.v1.r_ref); end
-                        if ~isfinite(wStop) && isfield(j.v1, "w_stop"), wStop = double(j.v1.w_stop); end
-                    end
-                    break;
-                catch
+        rutaCond = fullfile(matlabDir, "diseno-controlador-digital", "condiciones_diseno.json");
+        if isfile(rutaCond)
+            try
+                j = jsondecode(fileread(rutaCond));
+                if isfield(j, "v1")
+                    if ~isfinite(rRef) && isfield(j.v1, "r_ref"), rRef = double(j.v1.r_ref); end
+                    if ~isfinite(wStop) && isfield(j.v1, "w_stop"), wStop = double(j.v1.w_stop); end
                 end
+            catch
             end
         end
     end

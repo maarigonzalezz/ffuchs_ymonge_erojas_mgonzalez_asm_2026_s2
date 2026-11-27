@@ -45,13 +45,10 @@ CAPTURA_SCRIPT = MATLAB_DIR / "captura_serial.py"
 CSV_DIR = MODULO_DIR / "csv"
 GRAFICAS_DIR = MODULO_DIR / "graficas"
 REGISTRO_JSON = CSV_DIR / "registro_finales.json"
-DATOS_FINALES_DIR = MATLAB_DIR / "datos" / "finales"
 
 RESUMEN_AJUSTE_CSV = MATLAB_DIR / "ajuste-controlador" / "resumen_ajuste.csv"
-REGISTRO_AJUSTE_JSON = MATLAB_DIR / "ajuste-controlador" / "csv" / "registro_pruebas.json"
 CONDICIONES_DISENO_CANDIDATOS = (
     MATLAB_DIR / "diseno-controlador-digital" / "condiciones_diseno.json",
-    MATLAB_DIR / "condiciones_diseno.json",
 )
 
 
@@ -260,24 +257,6 @@ def _capturar_condiciones(args: argparse.Namespace, condiciones: list[dict], pid
         }
     _guardar_registro(registro)
 
-    if args.sincronizar_datos:
-        _sincronizar_a_datos_finales()
-
-
-def _sincronizar_a_datos_finales() -> None:
-    """Copia CSVs y condiciones_diseno.json a proyecto_2/matlab/datos/finales/."""
-    DATOS_FINALES_DIR.mkdir(parents=True, exist_ok=True)
-    for patron in ("*.csv", "*.capture.json"):
-        for viejo in DATOS_FINALES_DIR.glob(patron):
-            viejo.unlink()
-        for nuevo in CSV_DIR.glob(patron):
-            if ".partial" not in nuevo.name.lower():
-                shutil.copy2(nuevo, DATOS_FINALES_DIR / nuevo.name)
-    for ruta in CONDICIONES_DISENO_CANDIDATOS:
-        if ruta.is_file():
-            shutil.copy2(ruta, DATOS_FINALES_DIR / "condiciones_diseno.json")
-            break
-
 
 def _ejecutar_matlab() -> None:
     if shutil.which("matlab") is None:
@@ -356,7 +335,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pausa", type=float, default=2.0, help="Pausa entre corridas consecutivas (s).")
     parser.add_argument("--limpiar", action="store_true", help="Borrar todas las corridas previas de csv/ antes de guardar.")
     parser.add_argument("--solo-matlab", action="store_true", help="No capturar hardware; solo analizar csv/ en MATLAB.")
-    parser.add_argument("--sincronizar-datos", action="store_true", help="Copiar los CSV a proyecto_2/matlab/datos/finales/.")
     parser.add_argument("--no-open", action="store_true", help="No abrir graficas automaticamente al terminar.")
     return parser.parse_args(argv)
 
@@ -369,8 +347,6 @@ def main(argv: list[str] | None = None) -> int:
         defaults = _cargar_defaults()
         condiciones = _construir_condiciones(args, defaults)
         _capturar_condiciones(args, condiciones, str(defaults["pid_origen"]))
-    elif args.sincronizar_datos:
-        _sincronizar_a_datos_finales()
 
     _ejecutar_matlab()
 

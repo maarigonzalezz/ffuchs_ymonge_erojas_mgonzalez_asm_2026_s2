@@ -33,8 +33,8 @@ arguments
     opciones.CarpetaResultados (1,1) string = ""
     opciones.CarpetaSalidaFija (1,1) string = ""
     opciones.CarpetaFigurasFija (1,1) string = ""
-    opciones.LimpiarFigurasPrevias (1,1) logical = false
-    opciones.ActualizarRaiz logical {mustBeScalarOrEmpty} = logical.empty
+    opciones.LimpiarFigurasPrevias (1,1) logical = true
+    opciones.ActualizarRaiz (1,1) logical = false
     opciones.GuardarFiguras (1,1) logical = true
     opciones.MostrarFiguras (1,1) logical = true
 end
@@ -73,11 +73,11 @@ if ~isempty(opciones.Modelo) && isstruct(opciones.Modelo)
 else
     rutaMat = opciones.RutaModelo;
     if strlength(rutaMat) == 0
-        rutaMat = fullfile(rutaBase, "modelo_planta_identificado.mat");
+        rutaMat = fullfile(rutaBase, "caracterizacion_parametros", "modelo_planta_identificado.mat");
     end
     if ~isfile(rutaMat)
         error("frenado:MissingModel", ...
-              "No existe %s. Ejecute primero caracterizacion_planta / caracterizacion.py.", rutaMat);
+              "No existe %s. Ejecute primero caracterizacion_parametros/caracterizacion.py.", rutaMat);
     end
     S = load(rutaMat);
     for campo = ["Gp","a","c0","Kb_J","L"]
@@ -310,25 +310,19 @@ fprintf("=======================================================================
 % ------------------------------------------------------------------------
 if strlength(opciones.CarpetaSalidaFija) > 0
     carpetaResultados = opciones.CarpetaSalidaFija;
+elseif strlength(opciones.CarpetaResultados) > 0
+    carpetaResultados = opciones.CarpetaResultados;
 else
-    carpetaResultados = fullfile(rutaBase, "resultados", "diseno_pid");
-    if strlength(opciones.CarpetaResultados) > 0
-        carpetaResultados = fullfile(opciones.CarpetaResultados, "diseno_pid");
-    end
-    carpetaResultados = fullfile(carpetaResultados, string(datetime("now", "Format", "yyyyMMdd_HHmmss_SSS")));
+    carpetaResultados = rutaModulo;
 end
 
 if strlength(opciones.CarpetaFigurasFija) > 0
     carpetaFiguras = opciones.CarpetaFigurasFija;
 else
-    carpetaFiguras = fullfile(carpetaResultados, "figuras");
+    carpetaFiguras = fullfile(carpetaResultados, "graficas");
 end
 
-if isempty(opciones.ActualizarRaiz)
-    actualizarRaiz = (strlength(opciones.CarpetaResultados) == 0);
-else
-    actualizarRaiz = opciones.ActualizarRaiz;
-end
+actualizarRaiz = opciones.ActualizarRaiz;
 
 if ~isfolder(carpetaResultados), mkdir(carpetaResultados); end
 if ~isfolder(carpetaFiguras), mkdir(carpetaFiguras); end

@@ -39,13 +39,10 @@ MATLAB_DIR = MODULO_DIR.parent
 CAPTURA_SCRIPT = MATLAB_DIR / "captura_serial.py"
 CSV_DIR = MODULO_DIR / "csv"
 GRAFICAS_DIR = MODULO_DIR / "graficas"
-STAGING_DIR = MODULO_DIR / "_staging_csv"
 REGISTRO_JSON = CSV_DIR / "registro_pruebas.json"
-DATOS_AJUSTE_DIR = MATLAB_DIR / "datos" / "ajuste"
 
 CONDICIONES_DISENO_CANDIDATOS = (
     MATLAB_DIR / "diseno-controlador-digital" / "condiciones_diseno.json",
-    MATLAB_DIR / "condiciones_diseno.json",
 )
 
 
@@ -227,20 +224,6 @@ def _capturar_condiciones(args: argparse.Namespace, condiciones: list[dict]) -> 
         }
     _guardar_registro(registro)
 
-    if args.sincronizar_datos:
-        _sincronizar_a_datos_ajuste()
-
-
-def _sincronizar_a_datos_ajuste() -> None:
-    """Copia las corridas de csv/ a proyecto_2/matlab/datos/ajuste/ para evaluacion_experimentos.m."""
-    DATOS_AJUSTE_DIR.mkdir(parents=True, exist_ok=True)
-    for patron in ("*.csv", "*.capture.json"):
-        for viejo in DATOS_AJUSTE_DIR.glob(patron):
-            viejo.unlink()
-        for nuevo in CSV_DIR.glob(patron):
-            if ".partial" not in nuevo.name.lower():
-                shutil.copy2(nuevo, DATOS_AJUSTE_DIR / nuevo.name)
-
 
 def _ejecutar_matlab() -> None:
     if shutil.which("matlab") is None:
@@ -317,7 +300,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pausa", type=float, default=2.0, help="Pausa entre corridas consecutivas (s).")
     parser.add_argument("--limpiar", action="store_true", help="Borrar todas las condiciones previas de csv/ antes de guardar.")
     parser.add_argument("--solo-matlab", action="store_true", help="No capturar hardware; solo analizar csv/ en MATLAB.")
-    parser.add_argument("--sincronizar-datos", action="store_true", help="Copiar los CSV resultantes a proyecto_2/matlab/datos/ajuste/.")
     parser.add_argument("--no-open", action="store_true", help="No abrir la grafica automaticamente al terminar.")
     return parser.parse_args(argv)
 
@@ -330,8 +312,6 @@ def main(argv: list[str] | None = None) -> int:
         defaults = _cargar_defaults_diseno()
         condiciones = _construir_condiciones(args, defaults)
         _capturar_condiciones(args, condiciones)
-    elif args.sincronizar_datos:
-        _sincronizar_a_datos_ajuste()
 
     _ejecutar_matlab()
 
