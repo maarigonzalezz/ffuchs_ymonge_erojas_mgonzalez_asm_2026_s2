@@ -39,9 +39,14 @@ proyecto_2/
     ├── diseno_pid.m                          # Wrapper retrocompatible hacia diseno-controlador-digital/
     ├── ajuste-controlador/                   # Módulo autocontenido de ajuste experimental P/PI/PID (Etapa 5)
     │   ├── ajuste.py                         # CLI: `python -B ajuste.py 3` (captura N reps + promedia + MATLAB)
-    │   ├── analizar_ajuste.m                 # Métricas (RMSE, IAE, TV_u, Sat, AW, t_f), ensamble y 4 gráficas
+    │   ├── analizar_ajuste.m                 # Métricas (RMSE, IAE, TV_u, Sat, AW, t_f), ensamble y 6 gráficas
     │   ├── csv/                              # Corridas runpid y registro_pruebas.json con ganancias usadas
-    │   └── graficas/                         # Últimas 4 gráficas PNG a 300 dpi (incl. panel de métricas)
+    │   └── graficas/                         # Últimas 6 gráficas PNG a 300 dpi (incl. ganador y Laplace)
+    ├── experimentos-finales/                 # Módulo autocontenido de comparación OPEN vs PID V1/V2 (Etapa 6)
+    │   ├── experimentos.py                   # CLI: `python -B experimentos.py 3` (12 corridas + MATLAB)
+    │   ├── analizar_finales.m                # Métricas (RMSE, IAE, t_f, |a|_max, Sat), ensamble y 4 gráficas
+    │   ├── csv/                              # Corridas V1/V2 x OPEN/PID y registro_finales.json
+    │   └── graficas/                         # Últimas 4 gráficas PNG a 300 dpi (V1, V2, métricas, repetibilidad)
     ├── identificacion_semiautomatica.m       # E1 (+2 pts): captura 3 ensayos + ajusta + sugiere PID
     ├── evaluacion_experimentos.m             # Evaluación de ajuste P/PI/PID y finales V1/V2 (figuras + .tex)
     ├── evaluacion_extras.m                   # Evaluación de extras E2 (polos/margen Z), E3, E4 y E5
