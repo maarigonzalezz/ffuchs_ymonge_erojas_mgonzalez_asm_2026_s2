@@ -36,7 +36,7 @@ class CaptureError(RuntimeError):
     """Captura incompleta, rechazada o inconsistente con el firmware."""
 
 
-SETUP_COMMANDS = {"pid", "ref", "cfg"}
+SETUP_COMMANDS = {"pid", "ref", "cfg", "abs"}
 
 
 def check_setup(setup):
@@ -46,7 +46,7 @@ def check_setup(setup):
         command = command.strip()
         parts = command.split()
         if not parts or parts[0].lower() not in SETUP_COMMANDS:
-            raise ValueError("--setup solo admite comandos pid, ref o cfg.")
+            raise ValueError("--setup solo admite comandos pid, ref, cfg o abs.")
         if not command.isascii() or not command.isprintable() or "x" in command.lower():
             raise ValueError("Comando de configuracion invalido (ASCII imprimible y sin la letra x).")
         cleaned.append(command)
